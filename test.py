@@ -1,16 +1,14 @@
 from collections import deque
 
 
-def next_package(max_priority, queues):
-    for i in range(0, max_priority + 1):
-        try:
-            return queues[i].popleft()
-        except IndexError:
-            pass
-    print(str(queues) + " h ")
-    return None
+class A(object):
+    def tmp(self):
+        print("hello")
 
 
-queues = {1: deque([1, 2, 3]), 0: deque([])}
+class B(A):
+    def foo(self):
+        self.tmp()
 
-print(next_package(3, queues))
+
+B().foo()
