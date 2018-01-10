@@ -2,13 +2,19 @@ from collections import deque
 
 
 class A(object):
-    def tmp(self):
-        print("hello")
+    def __init__(self):
+        print("Hello world")
+
+class B(object):
+    def __init__(self):
+        print("Magic")
 
 
-class B(A):
-    def foo(self):
-        self.tmp()
+def foo(cls):
+    return cls()
 
 
-B().foo()
+tmp = foo(A)
+tmp2 = foo(A)
+print(tmp == tmp2)
+foo(B)
