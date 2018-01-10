@@ -88,6 +88,7 @@ class Node(object):
 class NetworkBuilder(object):
     def __init__(self, channel_types):
         # channel_types = { type: physical_travel_factor }
+        # physical_travel_factor in m/µs
         self.channel_types = channel_types
         # { address: Node }
         self._nodes = {}
@@ -97,7 +98,7 @@ class NetworkBuilder(object):
     # time one bit takes to travel the physical layer
     def physical_delay(self, channel_type, channel_length):
         if channel_type is not None and self.channel_types is not None:
-            return channel_length * self.channel_types[channel_type]
+            return channel_length / self.channel_types[channel_type]
         return 0
 
     def append_nodes(self, *nodes):
@@ -105,7 +106,7 @@ class NetworkBuilder(object):
             self._nodes[node.address] = node
         return self
 
-    # bandwidth in Mb/s
+    # bandwidth in Mb/s, channel_length in m
     def connect_nodes(self, node_a, node_b, bandwidth=10, channel_type=None, channel_length=0):
         node_a_dict = self._table[node_a.address]
         node_b_dict = self._table[node_b.address]
@@ -113,10 +114,11 @@ class NetworkBuilder(object):
         interface_b = node_b_dict.__len__() + 1
         # Mb/s = 10^6b/s = 10^6b/10^6µs = x
         # b/µs = x
-        node_a_dict[interface_a] = [node_b.address, interface_b, bandwidth,
-                                    self.physical_delay(channel_type, channel_length)]
-        node_b_dict[interface_b] = [node_a.address, interface_a, bandwidth,
-                                    self.physical_delay(channel_type, channel_length)]
+        # bandwidth doesn't need to be changed
+        physical_delay = self.physical_delay(channel_type, channel_length)
+        print(physical_delay)
+        node_a_dict[interface_a] = [node_b.address, interface_b, bandwidth, physical_delay]
+        node_b_dict[interface_b] = [node_a.address, interface_a, bandwidth, physical_delay]
         node_a.add_interface(interface_a)
         node_b.add_interface(interface_b)
         return self
