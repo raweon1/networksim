@@ -230,7 +230,7 @@ def variance_queue_length(data, _average_queue_length):
     for package in sorted(data, key=lambda p: p[0]):
         q_time = package[0] - last_time
         last_time = package[0]
-        queue_len[0] += pow(q_time * package[1] - _average_queue_length, 2)
+        queue_len[0] += q_time * pow(package[1] - _average_queue_length, 2)
         queue_len[1] += q_time
     return sqrt(queue_len[0] / queue_len[1])
 

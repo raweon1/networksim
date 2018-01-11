@@ -1,11 +1,14 @@
 import simpy
 import numpy as np
-from collections import defaultdict, deque
+from collections import defaultdict
 from time import time
 
+from switch_buffer import *
 
-def sim_print(env, str):
-    print("%0.2f:" % env.now + " " + str)
+
+def sim_print(env, msg):
+    if env.verbose:
+        print("%0.2f:" % env.now + " " + msg)
 
 
 class HeaderException(Exception):
@@ -22,13 +25,23 @@ class Package(object):
     each package has a source - which is an unique identifier of a node in the system
     each package has a destination - which is an unique identifier of a node in the system
     """
+    id = 1
 
-    def __init__(self, payload, header, source, destination):
+    def __init__(self, source, destination, payload, priority=20, header=(26, "Ethernet_Frame_Header")):
+        self.id = Package.id
+        Package.id += 1
         self.payload = payload
         self.source = source
         self.destination = destination
         self.headers = []
         self.append_header(header)
+        self.priority = priority
+
+    def on_hop(self, sender, receiver):
+        pass
+
+    def on_destination_reached(self, node):
+        pass
 
     def peek_header(self):
         if self.headers.__len__() == 0:
@@ -41,7 +54,6 @@ class Package(object):
         return self.headers.pop()
 
     def append_header(self, header):
-        # todo check header
         self.headers.append(header)
         return self
 
@@ -52,7 +64,8 @@ class Package(object):
         return t_len
 
     def __str__(self):
-        return "Package: (source: %s, dest: %s, size: %d)" % (str(self.source), str(self.destination), self.__len__())
+        return "Package(%d): (source: %s, dest: %s, size: %d, prio: %d)" % \
+               (self.id, str(self.source), str(self.destination), self.__len__(), self.priority)
 
 
 class Node(object):
@@ -61,29 +74,32 @@ class Node(object):
         self.address = address
         self.interfaces = []
 
-    def on_package_received(self, package, interface):
-        raise NotImplementedError("You have to implement this")
+    def on_package_received(self, package, interface_in):
+        sim_print(self.env, "%s: %s received on interface %s" % (str(self.address), str(package), str(interface_in)))
 
-    def on_package_send(self, package, interface):
-        raise NotImplementedError("You have to implement this")
+    def on_package_sending(self, package, interface_out):
+        sim_print(self.env, "%s: %s sending on interface %s" % (str(self.address), str(package), str(interface_out)))
 
     def on_interface_added(self, interface):
         raise NotImplementedError("You have to implement this")
 
-    # called when Node receives a package
-    def push(self, package, interface):
-        self.on_package_received(package, interface)
+    # called by NetworkEnvironment when Node receives a package
+    def push(self, package, interface_in):
+        self.on_package_received(package, interface_in)
 
     # called when Node starts sending a package on interface x
-    # returns timeout_event until package is completely send
-    def pop(self, package, interface):
-        send_event = self.env.send_package(package, self.address, interface)
-        self.on_package_send(package, interface)
+    # returns timeout_event until package is completely send [AND an inspector for that event if inspector=True]
+    def pop(self, package, interface_out, inspector=False):
+        send_event = self.env.send_package(package, self.address, interface_out, inspector)
+        self.on_package_sending(package, interface_out)
         return send_event
 
     def add_interface(self, interface):
         self.interfaces.append(interface)
         self.on_interface_added(interface)
+
+    def __str__(self):
+        return str(self.address)
 
 
 class NetworkBuilder(object):
@@ -117,7 +133,6 @@ class NetworkBuilder(object):
         # b/µs = x
         # bandwidth doesn't need to be changed
         physical_delay = self.physical_delay(channel_type, channel_length)
-        print(physical_delay)
         node_a_dict[interface_a] = [node_b.address, interface_b, bandwidth, physical_delay]
         node_b_dict[interface_b] = [node_a.address, interface_a, bandwidth, physical_delay]
         node_a.add_interface(interface_a)
@@ -134,138 +149,126 @@ class NetworkBuilder(object):
 class NetworkEnvironment(simpy.Environment):
     # Speed of light in m/µs : 299.792
     # {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792, "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
-    # channel_types = { type: physical_travel_factor }
-    def __init__(self, channel_types=None, *args, **kwargs):
+    # channel_types = { type: physical_travel_factor (in m/µs) }
+    def __init__(self, channel_types=None, verbose=True, *args, **kwargs):
         super(NetworkEnvironment, self).__init__(*args, **kwargs)
+        self.verbose = verbose
         self.builder = NetworkBuilder(channel_types)
         self._nodes = self.builder.get_nodes()
         self._table = self.builder.get_table()
-        # (destination, interface_in, package, arrival_time)
-        self.packages_to_push = []
         self.sleep_event = self.event()
-        self.push_process = self.process(self.send_package_proc())
 
-    def send_package(self, package, source, interface):
-        # receiver = [destination, interface_in, bandwidth, physical_delay]
-        receiver = self._table[source][interface]
-        # time it takes to put the packet on the channel
-        # package.__len__() is Bytes | receiver[2] = bandwidth is b/µs
-        sending_time = (package.__len__() * 8) / receiver[2]
-        arrival_time = self.now + sending_time + receiver[3]
-        self.packages_to_push.append((receiver[0], receiver[1], package, arrival_time))
-        self.push_process.interrupt("new package")
-        return self.timeout(sending_time)
+    # returns a process to yield and an inspector
+    def send_package(self, package, source_address, interface_out, inspector=False):
+        # receiver = [address, interface_in, bandwidth, physical_delay]
+        receiver = self._table[source_address][interface_out]
+        # package.__len__() in Bytes | receiver[2] = bandwidth in b/µs | receiver[3] physical delay in µs
+        sending_time = ((package.__len__() * 8) / receiver[2]) + receiver[3]
+        # inspector contains finish_time, the sim_time when the package is send. this is important for preemption
+        if inspector:
+            inspector = SendingProcessInspector()
+            return self.process(self.send_package_process(package, self._nodes[receiver[0]], receiver[1], sending_time,
+                                                          self._nodes[source_address], inspector)), inspector
+        else:
+            return self.process(self.send_package_process(package, self._nodes[receiver[0]], receiver[1], sending_time,
+                                                          self._nodes[source_address]))
 
-    def send_package_proc(self):
-        package = None
-        package_event = None
-        while True:
+    # do not interrupt this process without an inspector and checking finish_time
+    # (this can cause a bug when you interrupt this process at the same time as it would be processed)
+    # for this reason a runtime error (inspector is none) will occur to prevent interrupting without an inspector
+    def send_package_process(self, package, receiver, interface_in, sending_time, sender, inspector=None):
+        start_time = self.now
+        if inspector is not None:
+            inspector.finish_time = self.now + sending_time
+        sending = True
+        while sending_time > 0:
             try:
-                if self.packages_to_push.__len__() > 0:
-                    if not package_event.processed:
-                        yield package_event
-                        self._nodes[package[0]].push(package[2], package[1])
-                        self.packages_to_push.pop()
-                    else:
-                        self.packages_to_push.sort(reverse=True, key=lambda r: r[3])
-                        package = self.packages_to_push[self.packages_to_push.__len__() - 1]
-                        package_event = self.timeout(package[3] - self.now)
-                        yield package_event
-                        self._nodes[package[0]].push(package[2], package[1])
-                        self.packages_to_push.pop()
+                if sending:
+                    yield self.timeout(sending_time)
+                    sending_time = 0
+                    receiver.push(package, interface_in)
+                    package.on_hop(sender, receiver)
+                    if receiver.address == package.destination:
+                        package.on_destination_reached(receiver)
                 else:
                     yield self.sleep_event
             except simpy.Interrupt:
-                self.packages_to_push.sort(reverse=True, key=lambda r: r[3])
-                if package_event is None or package[3] > \
-                        self.packages_to_push[self.packages_to_push.__len__() - 1][3]:
-                    package = self.packages_to_push[self.packages_to_push.__len__() - 1]
-                    package_event = self.timeout(package[3] - self.now)
+                if sending:
+                    sending_time -= self.now - start_time
+                    inspector.finish_time = -1
+                    # todo maybe sending_time += penalty (e.g. more bytes to transmit)
+                else:
+                    start_time = self.now
+                    inspector.finish_time = self.now + sending_time
+                sending = not sending
+
+
+class SendingProcessInspector(object):
+    def __init__(self):
+        self.finish_time = 0
 
 
 class Flow(Node):
     def __init__(self, env, address, destination):
         super(Flow, self).__init__(env, address)
         self.destination = destination
-        self.procs = []
-
-    def on_package_received(self, package, interface):
-        sim_print(self.env, "%s: %s received on interface %s" % (str(self.address), str(package), str(interface)))
-
-    def on_package_send(self, package, interface):
-        sim_print(self.env, "%s: %s sending on interface %s" % (str(self.address), str(package), str(interface)))
+        self.processes = []
 
     def on_interface_added(self, interface):
-        self.procs.append(self.env.process(self.run(interface)))
+        self.processes.append(self.env.process(self.run(interface)))
 
     def run(self, interface):
         while True:
             # package = payload, header, source, destination
-            payload = np.random.randint(1, 5000)
-            header = (np.random.randint(1, 15), "")
-            package = Package(payload, header, self.address, self.destination)
+            payload = abs(np.random.normal(750, 700))
+            priority = np.random.randint(0, 3)
+            package = Package(self.address, self.destination, payload, priority)
             # self.env.send_package(package, self.address, self.interface)
             yield self.pop(package, interface)
             sim_print(self.env, "%s: %s send on interface %s" % (str(self.address), str(package), str(interface)))
-            # sleep_time = np.random.randint(4, 14)
-            # yield self.env.timeout(sleep_time)
+            sleep_time = np.random.exponential(1.1)
+            yield self.env.timeout(sleep_time)
 
 
 class Sink(Node):
     def __init__(self, env, address):
         super(Sink, self).__init__(env, address)
 
-    def on_package_received(self, package, interface):
-        sim_print(self.env, "%s: %s received on interface %s" % (str(self.address), str(package), str(interface)))
-
-    def on_package_send(self, package, interface):
-        pass
-
     def on_interface_added(self, interface):
         pass
 
 
-class SwitchBuffer(object):
-    def next_package(self):
-        raise NotImplementedError("You have to implement this")
+class SinglePacket(Node):
+    def __init__(self, env, address, destination, payload, wait_until, priority=20):
+        super(SinglePacket, self).__init__(env, address)
+        self.destination = destination
+        self.payload = payload
+        self.priority = priority
+        self.wait_until = wait_until
+        self.process = env.process(self.run())
 
-    def empty(self):
-        raise NotImplementedError("You have to implement this")
+    def on_interface_added(self, interface):
+        pass
 
-    def append_package(self, package):
-        raise NotImplementedError("You have to implement this")
-
-    def __len__(self):
-        raise NotImplementedError("You have to implement this")
-
-
-class FCFS_Scheduler(SwitchBuffer):
-    def __init__(self):
-        self.queue = deque([])
-
-    def append_package(self, package):
-        self.queue.append(package)
-
-    def empty(self):
-        return self.queue.__len__() == 0
-
-    def next_package(self):
-        return self.queue.popleft()
-
-    def __len__(self):
-        return self.queue.__len__()
+    def run(self):
+        yield self.env.timeout(self.wait_until)
+        package = Package(self.address, self.destination, self.payload, self.priority)
+        yield self.pop(package, self.interfaces[0])
 
 
 class Switch(Node):
-    def __init__(self, env, address, buffer_type=FCFS_Scheduler, aging_time=1000, preemption=False):
+    # aging_time in seconds
+    def __init__(self, env, address, buffer_type=FCFS_Buffer, aging_time=-1, preemption=False, monitor=False):
         super(Switch, self).__init__(env, address)
+        # monitor this switch
+        self.monitor = monitor
         # must be a subclass of SwitchBuffer - important: cannot be an instance of SwitchBuffer!
         self.buffer_type = buffer_type
-        # time until entries in switch_table become invalid
-        self.aging_time = aging_time
+        # time until entries in switch_table become invalid, input in seconds -> x1.000.000 for µs
+        self.aging_time = aging_time * 1000000 if aging_time > 0 else aging_time
         # activate preemption for this Switch
         self.preemption = preemption
-        # { source: interface_in, time }
+        # { source: interface_in, time } = { destination: interface_out, time }
         self.switch_table = {}
         # {interface: [buffer, process] }
         # buffer and simpy.process for each interface
@@ -273,61 +276,132 @@ class Switch(Node):
         # sleeping event if buffer is empty
         self.sleep_event = env.event()
 
-    def on_package_received(self, package, interface):
-        sim_print(self.env, "%s: %s received on interface %s" % (str(self.address), str(package), str(interface)))
+    def on_package_received(self, package, interface_in):
+        sim_print(self.env, "%s: %s received on interface %s" % (str(self.address), str(package), str(interface_in)))
         # create entry in switch_table
-        self.switch_table[package.source] = [interface, self.env.now]
+        self.switch_table[package.source] = [interface_in, self.env.now]
         # valid switch_table entry -> add package to buffer of interface x
         # invalid switch_table entry -> broadcast package
+        # interface_out = interface_in -> discard package
         try:
             destination_entry = self.switch_table[package.destination]
-            if self.env.now > destination_entry[1] + self.aging_time:
-                self.broadcast_package(package, interface)
+            # entry to old | aging_time < 0 -> ignore aging_time
+            if self.aging_time > 0 and self.env.now > destination_entry[1] + self.aging_time:
+                self.broadcast_package(package, interface_in)
+                del self.switch_table[package.destination]
             else:
-                self.interface_modules[interface][0].append_package(package)
-                self.interface_modules[interface][1].interrupt("new package")
+                # destination_entry[0] = interface_out
+                if interface_in == destination_entry[0]:
+                    self.on_package_discard(package)
+                else:
+                    self.interface_modules[destination_entry[0]][0].append_package(package)
+                    self.interface_modules[destination_entry[0]][1].interrupt("new package")
         except KeyError:
-            self.broadcast_package(package, interface)
+            self.broadcast_package(package, interface_in)
 
-    def broadcast_package(self, package, source):
+    def broadcast_package(self, package, source_interface):
+        sim_print(self.env, "%s: %s broadcasting" % (str(self.address), str(package)))
         for interface, interface_module in self.interface_modules.items():
             # do not broadcast to source interface
-            if interface != source:
+            if interface != source_interface:
                 interface_module[0].append_package(package)
                 interface_module[1].interrupt("new package")
 
-    def on_package_send(self, package, interface):
-        sim_print(self.env, "%s: %s sending on interface %s" % (str(self.address), str(package), str(interface)))
+    def on_package_discard(self, package):
+        sim_print(self.env, "%s: %s discarded" % (str(self.address), str(package)))
 
     def on_interface_added(self, interface):
-        switch_buffer = self.buffer_type()
-        self.interface_modules[interface] = [switch_buffer, self.env.process(self.run(interface, switch_buffer))]
+        if self.monitor:
+            switch_buffer = MonitoredSwitchBuffer(self.env, self.buffer_type())
+        else:
+            switch_buffer = self.buffer_type()
+        if self.preemption:
+            self.interface_modules[interface] = [switch_buffer, self.env.process(
+                self.preemption_run(interface, switch_buffer))]
+        else:
+            self.interface_modules[interface] = [switch_buffer, self.env.process(self.run(interface, switch_buffer))]
 
     def run(self, interface, buffer):
-        delay = None
+        package = None
+        if buffer.empty():
+            try:
+                yield self.sleep_event
+            except simpy.Interrupt:
+                package = buffer.next_package()
+                sending_event = self.pop(package, interface)
+        else:
+            package = buffer.next_package()
+            sending_event = self.pop(package, interface)
         while True:
             try:
-                if not buffer.empty():
-                    if delay.processed:
+                if not buffer.empty() or not sending_event.processed:
+                    if sending_event.processed:
                         package = buffer.next_package()
-                        delay = self.pop(package, interface)
-                    yield delay
+                        sending_event = self.pop(package, interface)
+                    yield sending_event
+                    sim_print(self.env, "%s: %s send on interface %s" %
+                              (str(self.address), str(package), str(interface)))
+                    buffer.remove(package)
                 else:
                     yield self.sleep_event
             except simpy.Interrupt:
-                if delay is None:
-                    package = buffer.next_package()
-                    delay = self.pop(package, interface)
+                pass
+
+    def preemption_run(self, interface, buffer):
+        pending_events = {}
+        sending_package = None
+        inspector = None
+        if buffer.empty():
+            try:
+                yield self.sleep_event
+            except simpy.Interrupt:
+                sending_package = buffer.next_package()
+                sending_event, inspector = self.pop(sending_package, interface, True)
+        else:
+            sending_package = buffer.next_package()
+            sending_event, inspector = self.pop(sending_package, interface, True)
+        while True:
+            try:
+                if not buffer.empty() or not sending_event.processed:
+                    if sending_event.processed:
+                        sending_package = buffer.next_package()
+                        try:
+                            sending_event, inspector = pending_events[sending_package]
+                            sending_event.interrupt("continue sending")
+                            sim_print(self.env, "%s: %s continued on interface %s" %
+                                      (str(self.address), str(sending_package), str(interface)))
+                        except KeyError:
+                            sending_event, inspector = self.pop(sending_package, interface, True)
+                    yield sending_event
+                    sim_print(self.env, "%s: %s send on interface %s" %
+                              (str(self.address), str(sending_package), str(interface)))
+                    pending_events.pop(sending_package, None)
+                    buffer.remove(sending_package)
+                else:
+                    yield self.sleep_event
+            except simpy.Interrupt:
+                package = buffer.next_package()
+                # inspector.finish_time - self.env.now > 50 prevents a bug when we try to interrupt an event that would
+                # be processed at the same time (e.g. the package will be sent at the same time)
+                # and it isn't useful to interrupt a package which will be finished in sub 50 µs
+                if package != sending_package and not sending_event.processed and inspector.finish_time - self.env.now > 50:
+                    pending_events[sending_package] = sending_event, inspector
+                    sending_event.interrupt("stop sending")
+                    sim_print(self.env, "%s: %s stopped on interface %s" %
+                              (str(self.address), str(sending_package), str(interface)))
+                    sending_package = package
+                    sending_event, inspector = self.pop(sending_package, interface, True)
 
 
 tmp = time()
 some_channel_types = {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792,
                       "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
-env = NetworkEnvironment(channel_types=some_channel_types)
+env = NetworkEnvironment(channel_types=some_channel_types, verbose=False)
 builder = env.builder
-nodes = [Flow(env, "Flow-1", "Flow-2"), Switch(env, "Switch-1"), Flow(env, "Flow-2", "Flow-1"), Sink(env, "Sink-1")]
-builder.append_nodes(*nodes).connect_nodes(nodes[0], nodes[1]).connect_nodes(nodes[1], nodes[2]).\
-    connect_nodes(nodes[1], nodes[3])
-env.run(until=1000000)
-print("Simulation-time in µs")
+nodes = [Flow(env, "Flow-1", "Sink"), Switch(env, "Switch", buffer_type=FCFS_Buffer, preemption=False, monitor=True),
+         SinglePacket(env, "Sink", "Flow-1", 0, 0)]
+builder.append_nodes(*nodes).connect_nodes(nodes[0], nodes[1]).connect_nodes(nodes[1], nodes[2])
+env.run(until=100000000)
 print(time() - tmp)
+for interface, module in nodes[1].interface_modules.items():
+    parse(module[0].data, 1000000, interface, env._table[nodes[1].address][interface][2])
