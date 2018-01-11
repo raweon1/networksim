@@ -1,6 +1,7 @@
 import simpy
 import numpy as np
 from collections import defaultdict, deque
+from time import time
 
 
 def sim_print(env, str):
@@ -319,6 +320,7 @@ class Switch(Node):
                     delay = self.pop(package, interface)
 
 
+tmp = time()
 some_channel_types = {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792,
                       "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
 env = NetworkEnvironment(channel_types=some_channel_types)
@@ -326,5 +328,6 @@ builder = env.builder
 nodes = [Flow(env, "Flow-1", "Flow-2"), Switch(env, "Switch-1"), Flow(env, "Flow-2", "Flow-1"), Sink(env, "Sink-1")]
 builder.append_nodes(*nodes).connect_nodes(nodes[0], nodes[1]).connect_nodes(nodes[1], nodes[2]).\
     connect_nodes(nodes[1], nodes[3])
-env.run(until=10500)
+env.run(until=1000000)
 print("Simulation-time in µs")
+print(time() - tmp)
