@@ -24,13 +24,16 @@ class MonitoredSwitchBuffer(SwitchBuffer):
         self.env = env
         self.to_monitor = switch_buffer
         self.data = data if data is not None else defaultdict(list)
+        self.max_q_len = 0
 
     def next_package(self):
         return self.to_monitor.next_package()
 
     def append_package(self, package):
-        self.data["append"].append((self.env.now, self.__len__(), package))
         self.to_monitor.append_package(package)
+        self.data["append"].append((self.env.now, self.__len__(), package))
+        if self.to_monitor.__len__() > self.max_q_len:
+            self.max_q_len = self.to_monitor.__len__()
 
     def remove(self, package):
         self.data["pop"].append((self.env.now, self.__len__(), package))
@@ -156,10 +159,10 @@ def average_queue_length(data, runtime):
     queue_len = 0
     last_time = 0
     for package in sorted(data, key=lambda p: p[0]):
-        q_time = package[0] - last_time
+        q_time = (package[0] - last_time) / runtime
         last_time = package[0]
         queue_len += q_time * package[1]
-    return queue_len / runtime
+    return queue_len
 
 
 def standard_deviation_queue_length(data, _average_queue_length, runtime):
@@ -168,8 +171,8 @@ def standard_deviation_queue_length(data, _average_queue_length, runtime):
     for package in sorted(data, key=lambda p: p[0]):
         q_time = package[0] - last_time
         last_time = package[0]
-        queue_len += q_time * pow(package[1] - _average_queue_length, 2)
-    return sqrt(queue_len / runtime)
+        queue_len += q_time * pow(package[1] - _average_queue_length, 2) / runtime
+    return sqrt(queue_len)
 
 
 # average size of packages ->send<-
@@ -192,6 +195,11 @@ def standard_deviation_packet_size(pop, _average_packet_size):
 def parse(data, runtime, interface, bandwidth):
     append = data["append"]
     pop = data["pop"]
+    print()
+    print("SwitchBuffer interface %s" % str(interface))
+    print("Bandwidth:                               %d b/µs = Mb/s" % bandwidth)
+    print("packages received                        %d" % append.__len__())
+    print("packages send                            %d" % pop.__len__())
 
     # average_waiting_time = Zeit seid Betreten des Swichtes bis zum Verlassen (inklusive Übertragungsdauer)
     _average_waiting_time = average_waiting_time(append, pop)
@@ -205,11 +213,10 @@ def parse(data, runtime, interface, bandwidth):
     _average_queue_length = average_queue_length(append_pop, runtime)
     _standard_deviation_queue_length = standard_deviation_queue_length(append_pop, _average_queue_length, runtime)
 
-    print("SwitchBuffer interface %s" % str(interface))
-    print("Bandwidth:                           %d b/µs = Mb/s" % bandwidth)
-    print("average package size:                %s Byte" % str(_average_packet_size))
-    print("standard deviation package size:     %s" % str(_standard_deviation_packet_size))
-    print("average waiting time:                %s" % str(_average_waiting_time))
-    print("standard deviation waiting time:     %s" % str(_standard_deviation_waiting_time))
-    print("average queue length:                %s" % str(_average_queue_length))
-    print("standard deviation queue length:     %s" % str(_standard_deviation_queue_length))
+    print("average package size:                    %s Byte" % str(_average_packet_size))
+    print("standard deviation package size:         %s Byte" % str(_standard_deviation_packet_size))
+    print("package size / bandwidth:                %s µs" % str(_average_packet_size * 8 / bandwidth))
+    print("average waiting time in µs:              %s" % str(_average_waiting_time))
+    print("standard deviation waiting time:         %s" % str(_standard_deviation_waiting_time))
+    print("average queue length:                    %s" % str(_average_queue_length))
+    print("standard deviation queue length:         %s" % str(_standard_deviation_queue_length))
