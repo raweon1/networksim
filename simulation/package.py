@@ -61,9 +61,11 @@ class MonitoredPackage(Package):
     def __init__(self, env, *args, **kwargs):
         super(MonitoredPackage, self).__init__(*args, **kwargs)
         self.env = env
+        self.start_time = env.now
+        self.latency = -1
 
     def on_hop(self, sender, receiver):
         pass
 
     def on_destination_reached(self, node):
-        pass
+        self.latency = self.env.now - self.start_time

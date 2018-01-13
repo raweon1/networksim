@@ -1,4 +1,5 @@
 import numpy as np
+from math import sqrt
 
 from simulation.package import *
 
@@ -16,7 +17,7 @@ class Node(object):
         self.env.sim_print("%s: %s sending on interface %s" % (str(self.address), str(package), str(interface_out)))
 
     def on_interface_added(self, interface):
-        raise NotImplementedError("You have to implement this")
+        pass
 
     # called by NetworkEnvironment when Node receives a package
     def push(self, package, interface_in):
@@ -38,9 +39,9 @@ class Node(object):
 
 
 class Flow(Node):
-    def __init__(self, env, address, destination):
+    def __init__(self, env, address, destination_address):
         super(Flow, self).__init__(env, address)
-        self.destination = destination
+        self.destination = destination_address
         self.processes = []
 
     def on_interface_added(self, interface):
@@ -48,7 +49,7 @@ class Flow(Node):
 
     def run(self, interface):
         while True:
-            # package = payload, header, source, destination
+            # package = source, destination, payload, priority=, header=
             payload = abs(np.random.normal(750, 700))
             priority = np.random.randint(0, 3)
             package = Package(self.address, self.destination, payload, priority)
@@ -68,9 +69,9 @@ class Sink(Node):
 
 
 class SinglePacket(Node):
-    def __init__(self, env, address, destination, payload, wait_until, priority=20):
+    def __init__(self, env, address, destination_address, payload, wait_until, priority=20):
         super(SinglePacket, self).__init__(env, address)
-        self.destination = destination
+        self.destination = destination_address
         self.payload = payload
         self.priority = priority
         self.wait_until = wait_until
@@ -83,3 +84,102 @@ class SinglePacket(Node):
         yield self.env.timeout(self.wait_until)
         package = Package(self.address, self.destination, self.payload, self.priority)
         yield self.pop(package, self.interfaces[0])
+
+
+class PackageInjector(Node):
+    def __init__(self, env, address, injection_target_address, destination_address, bandwidth,
+                 intensity_generator, payload_generator, priority_generator, monitor=False):
+        super(PackageInjector, self).__init__(env, address)
+        self.injection_target_address = injection_target_address
+        self.destination_address = destination_address
+        self.bandwidth = bandwidth
+        self.intensity_generator = intensity_generator
+        self.payload_generator = payload_generator
+        self.priority_generator = priority_generator
+        self.monitor = monitor
+        self.packages = []
+        self.process = env.process(self.run())
+
+    def run(self):
+        injection_node = self.env.nodes[self.injection_target_address]
+        while True:
+            # package = source, destination, payload, priority=, header=
+            payload = self.payload_generator.__next__()
+            priority = self.priority_generator.__next__()
+            if self.monitor:
+                package = MonitoredPackage(self.env, self.address, self.destination_address, payload, priority)
+                self.packages.append(package)
+            else:
+                package = Package(self.address, self.destination_address, payload, priority)
+            injection_node.push(package, "injected")
+            sleep_factor = self.intensity_generator.__next__()
+            sending_time = package.__len__() * 8 / self.bandwidth
+            yield self.env.timeout(sleep_factor * sending_time)
+
+
+def average_packet_size(packages):
+    average_package_length = 0
+    package_count = packages.__len__()
+    for package in packages:
+        average_package_length += package.__len__() / package_count
+    return average_package_length
+
+
+def standard_deviation_packet_size(packages, _average_packet_size):
+    sd_package_length = 0
+    package_count = packages.__len__()
+    for package in packages:
+        sd_package_length += pow(package.__len__() - _average_packet_size, 2) / package_count
+    return sqrt(sd_package_length)
+
+
+def destination_reached_count(packages):
+    count = 0
+    for package in packages:
+        if package.latency < 0:
+            break
+        count += 1
+    return count
+
+
+# packages: list of MonitoredPackage's
+# must be sorted by latency in reversed order
+def average_package_latency(packages, package_count):
+    _average_package_latency = 0
+    for package in packages:
+        if package.latency < 0:
+            break
+        _average_package_latency += package.latency / package_count
+    return _average_package_latency
+
+
+# packages: list of MonitoredPackage's
+# must be sorted by latency in reversed order
+def standard_deviation_latency(packages, _average_package_latency, package_count):
+    sd_package_latency = 0
+    for package in packages:
+        if package.latency < 0:
+            break
+        sd_package_latency += pow(package.latency - _average_package_latency, 2) / package_count
+    return sqrt(sd_package_latency)
+
+
+# data = list of monitored Packages
+def parse_node(monitored_node):
+    data = monitored_node.packages
+    monitored_node_address = monitored_node.address
+    _average_packet_size = average_packet_size(data)
+    _standard_deviation_packet_size = standard_deviation_packet_size(data, _average_packet_size)
+    data.sort(reverse=True, key=lambda p: p.latency)
+    package_count = destination_reached_count(data)
+    _average_package_latency = average_package_latency(data, package_count)
+    _standard_deviation_latency = standard_deviation_latency(data, _average_package_latency, package_count)
+
+    print()
+    print(monitored_node_address)
+    print("packages send:                           %s" % str(data.__len__()))
+    print("packages destination reached:            %d" % package_count)
+    print("average package size:                    %s Byte" % str(_average_packet_size))
+    print("standard deviation package size:         %s Byte" % str(_standard_deviation_packet_size))
+    print("average latency in µs:                   %s" % str(_average_package_latency))
+    print("standard deviation latency :             %s" % str(_standard_deviation_latency))

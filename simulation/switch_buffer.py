@@ -192,7 +192,8 @@ def standard_deviation_packet_size(pop, _average_packet_size):
     return sqrt(package_length)
 
 
-def parse(data, runtime, interface, bandwidth):
+def parse_switch_buffer(buffer, runtime, interface, bandwidth):
+    data = buffer.data
     append = data["append"]
     pop = data["pop"]
     print()
@@ -220,3 +221,4 @@ def parse(data, runtime, interface, bandwidth):
     print("standard deviation waiting time:         %s" % str(_standard_deviation_waiting_time))
     print("average queue length:                    %s" % str(_average_queue_length))
     print("standard deviation queue length:         %s" % str(_standard_deviation_queue_length))
+    print("Max queue length:                        %s" % buffer.max_q_len)
