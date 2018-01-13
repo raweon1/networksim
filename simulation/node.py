@@ -5,9 +5,10 @@ from simulation.package import *
 
 
 class Node(object):
-    def __init__(self, env, address):
+    def __init__(self, env, address, monitor=False):
         self.env = env
         self.address = address
+        self.monitor = monitor
         self.interfaces = []
 
     def on_package_received(self, package, interface_in):
@@ -17,6 +18,9 @@ class Node(object):
         self.env.sim_print("%s: %s sending on interface %s" % (str(self.address), str(package), str(interface_out)))
 
     def on_interface_added(self, interface):
+        pass
+
+    def get_monitor_results(self):
         pass
 
     # called by NetworkEnvironment when Node receives a package
@@ -87,30 +91,40 @@ class SinglePacket(Node):
 
 
 class PackageInjector(Node):
-    def __init__(self, env, address, injection_target_address, destination_address, bandwidth,
-                 intensity_generator, payload_generator, priority_generator, monitor=False):
-        super(PackageInjector, self).__init__(env, address)
+    def __init__(self, env, address, injection_target_address, bandwidth,
+                 intensity_generator, package_generator, monitor=False):
+        super(PackageInjector, self).__init__(env, address, monitor)
         self.injection_target_address = injection_target_address
-        self.destination_address = destination_address
         self.bandwidth = bandwidth
         self.intensity_generator = intensity_generator
-        self.payload_generator = payload_generator
-        self.priority_generator = priority_generator
-        self.monitor = monitor
+        self.package_generator = package_generator
         self.packages = []
         self.process = env.process(self.run())
+
+    def get_monitor_results(self):
+        self.packages.sort(reverse=True, key=lambda p: p.latency)
+        _destination_reached_count = destination_reached_count(self.packages)
+        _average_packet_size = average_packet_size(self.packages)
+        _standard_deviation_packet_size = standard_deviation_packet_size(self.packages, _average_packet_size)
+        _average_package_latency = average_package_latency(self.packages, _destination_reached_count)
+        _standard_deviation_latency = standard_deviation_latency(self.packages, _average_package_latency,
+                                                                 _destination_reached_count)
+        results = {"average_packet_size": _average_packet_size,
+                   "standard_deviation_packet_size": _standard_deviation_packet_size,
+                   "average_package_latency": _average_package_latency,
+                   "standard_deviation_latency": _standard_deviation_latency}
+        return results
 
     def run(self):
         injection_node = self.env.nodes[self.injection_target_address]
         while True:
-            # package = source, destination, payload, priority=, header=
-            payload = self.payload_generator.__next__()
-            priority = self.priority_generator.__next__()
+            try:
+                package = self.package_generator.__next__()
+            except StopIteration:
+                self.env.stop()
+                break
             if self.monitor:
-                package = MonitoredPackage(self.env, self.address, self.destination_address, payload, priority)
                 self.packages.append(package)
-            else:
-                package = Package(self.address, self.destination_address, payload, priority)
             injection_node.push(package, "injected")
             sleep_factor = self.intensity_generator.__next__()
             sending_time = package.__len__() * 8 / self.bandwidth
@@ -127,7 +141,7 @@ def average_packet_size(packages):
 
 def standard_deviation_packet_size(packages, _average_packet_size):
     sd_package_length = 0
-    package_count = packages.__len__()
+    package_count = packages.__len__() - 1
     for package in packages:
         sd_package_length += pow(package.__len__() - _average_packet_size, 2) / package_count
     return sqrt(sd_package_length)
@@ -156,6 +170,7 @@ def average_package_latency(packages, package_count):
 # packages: list of MonitoredPackage's
 # must be sorted by latency in reversed order
 def standard_deviation_latency(packages, _average_package_latency, package_count):
+    package_count -= 1
     sd_package_latency = 0
     for package in packages:
         if package.latency < 0:

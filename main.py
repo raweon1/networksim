@@ -5,6 +5,7 @@ from simulation.node import *
 from simulation.switch import Switch
 from simulation.switch_buffer import *
 from simulation.generators import *
+from simulation.simulation_wrapper import *
 
 
 def foo():
@@ -24,30 +25,25 @@ def foo():
         parse_switch_buffer(module[0].data, runtime, interface, env.table[nodes[1].address][interface][2])
 
 
+def some_package_generator(env, source, destination):
+    payload = 750
+    priority = 1
+    for i in range(0, 500):
+        yield MonitoredPackage(env, source, destination, payload, priority)
+
+
 def foo2():
-    tmp = time()
-    some_channel_types = {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792,
-                          "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
-    env = NetworkEnvironment(channel_types=some_channel_types, verbose=False, preemption_penalty_bytes=0,
-                             min_preemption_bytes=250)
-    builder = env.builder
-    pi = PackageInjector(env, "Injector", "Switch", "Sink", 10,
-                         exp_generator(1), static_generator(750), static_generator(1), True)
-    nodes = [pi,
-             Switch(env, "Switch", buffer_type=Priority_FCFS_Scheduler, preemption=False, monitor=True),
-             Switch(env, "Switch-2", buffer_type=Priority_FCFS_Scheduler, preemption=False, monitor=True),
-             SinglePacket(env, "Sink", "broadcast", 0, 0)]
-    builder.append_nodes(*nodes).connect_nodes(nodes[1], nodes[2]).connect_nodes(nodes[2], nodes[3])
-    runtime = 10000000
-    env.run(until=runtime)
-    print(time() - tmp)
-    monitored_switch = nodes[2]
-    for interface, module in monitored_switch.interface_modules.items():
-        parse_switch_buffer(module[0], runtime, interface, env.table[monitored_switch.address][interface][2])
-    monitored_switch = nodes[1]
-    for interface, module in monitored_switch.interface_modules.items():
-        parse_switch_buffer(module[0], runtime, interface, env.table[monitored_switch.address][interface][2])
-    parse_node(nodes[0])
-
-
-foo2()
+    while True:
+        some_channel_types = {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792,
+                              "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
+        env = NetworkEnvironment(channel_types=some_channel_types, verbose=False, preemption_penalty_bytes=0,
+                                 min_preemption_bytes=250)
+        builder = env.builder
+        pi = PackageInjector(env, "Injector", "Switch", 10,
+                             exp_generator(1), some_package_generator(env, "Injector", "Sink"), True)
+        nodes = [pi,
+                 Switch(env, "Switch", buffer_type=Priority_FCFS_Scheduler, preemption=False, monitor=True),
+                 Switch(env, "Switch-2", buffer_type=Priority_FCFS_Scheduler, preemption=False, monitor=True),
+                 SinglePacket(env, "Sink", "broadcast", 0, 0)]
+        builder.append_nodes(*nodes).connect_nodes(nodes[1], nodes[2]).connect_nodes(nodes[2], nodes[3])
+        yield env

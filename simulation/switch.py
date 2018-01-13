@@ -1,14 +1,12 @@
 from simulation.core import *
 from simulation.node import Node
-from simulation.switch_buffer import MonitoredSwitchBuffer, FCFS_Buffer
+from simulation.switch_buffer import *
 
 
 class Switch(Node):
     # aging_time in seconds
     def __init__(self, env, address, buffer_type=FCFS_Buffer, aging_time=-1, preemption=False, monitor=False):
-        super(Switch, self).__init__(env, address)
-        # monitor this switch
-        self.monitor = monitor
+        super(Switch, self).__init__(env, address, monitor)
         # must be a subclass of SwitchBuffer - important: cannot be an instance of SwitchBuffer!
         self.buffer_type = buffer_type
         # time until entries in switch_table become invalid, input in seconds -> x1.000.000 for µs
@@ -67,6 +65,33 @@ class Switch(Node):
                 self.preemption_run(interface, switch_buffer))]
         else:
             self.interface_modules[interface] = [switch_buffer, self.env.process(self.run(interface, switch_buffer))]
+
+    def get_monitor_results(self):
+        result = {}
+        for interface, interface_module in self.interface_modules.items():
+            append = interface_module[0].data["append"]
+            pop = interface_module[0].data["pop"]
+
+            # average_waiting_time = Zeit seid Betreten des Swichtes bis zum Verlassen (inklusive Übertragungsdauer)
+            _average_waiting_time = average_waiting_time(append, pop)
+            _standard_deviation_waiting_time = standard_deviation_waiting_time(append, pop, _average_waiting_time)
+
+            _average_packet_size = average_packet_size(pop)
+            _standard_deviation_packet_size = standard_deviation_packet_size(pop, _average_packet_size)
+
+            append_pop = append + pop
+
+            _average_queue_length = average_queue_length(append_pop, self.env.now)
+            _standard_deviation_queue_length = standard_deviation_queue_length(append_pop, _average_queue_length,
+                                                                               self.env.now)
+            sub_result = {"average_waiting_time": _average_waiting_time,
+                          "standard_deviation_waiting_time": _standard_deviation_waiting_time,
+                          "average_queue_length": _average_queue_length,
+                          "standard_deviation_queue_length": _standard_deviation_queue_length,
+                          "average_packet_size": _average_packet_size,
+                          "standard_deviation_packet_size": _standard_deviation_packet_size}
+            result[interface] = sub_result
+        return result
 
     def run(self, interface, buffer):
         package = None

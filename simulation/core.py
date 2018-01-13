@@ -15,11 +15,29 @@ class NetworkEnvironment(simpy.Environment):
         self.builder = NetworkBuilder(channel_types)
         self.nodes = self.builder.nodes
         self.table = self.builder.table
+        self.stop_event = self.event()
         self.sleep_event = self.event()
 
     def sim_print(self, msg):
         if self.verbose:
             print("%0.2f: %s" % (self.now, msg))
+
+    # if until <= 0: run until stop() has been called
+    def run(self, until=None):
+        if isinstance(until, int) and until <= 0:
+            super(NetworkEnvironment, self).run(until=self.stop_event)
+        else:
+            super(NetworkEnvironment, self).run(until)
+
+    def stop(self):
+        self.stop_event.succeed()
+
+    def get_monitor_results(self):
+        result = {}
+        for node in self.nodes.values():
+            if node.monitor:
+                result[node.address] = node.get_monitor_results()
+        return result
 
     # returns a process to yield and an inspector
     def send_package(self, package, source_address, interface_out, extra_bytes=0, inspector=False):

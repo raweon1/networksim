@@ -152,7 +152,7 @@ def standard_deviation_waiting_time(append, pop, _average_waiting_time):
         tmp = stats[-1]
         tmp[0] += pow(waiting_time - _average_waiting_time[-1], 2)
         tmp[1] += 1
-    return [(key, sqrt(value[0] / value[1])) for key, value in sorted(stats.items())]
+    return {key: value[0] / (value[1] - 1) for key, value in sorted(stats.items())}
 
 
 def average_queue_length(data, runtime):
@@ -186,7 +186,7 @@ def average_packet_size(pop):
 
 def standard_deviation_packet_size(pop, _average_packet_size):
     package_length = 0
-    package_count = pop.__len__()
+    package_count = pop.__len__() - 1
     for package in pop:
         package_length += pow(package[2].__len__() - _average_packet_size, 2) / package_count
     return sqrt(package_length)
