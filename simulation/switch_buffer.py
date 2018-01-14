@@ -152,7 +152,7 @@ def standard_deviation_waiting_time(append, pop, _average_waiting_time):
         tmp = stats[-1]
         tmp[0] += pow(waiting_time - _average_waiting_time[-1], 2)
         tmp[1] += 1
-    return {key: value[0] / (value[1] - 1) for key, value in sorted(stats.items())}
+    return {key: value[0] / ((value[1] - 1) if value[1] > 1 else 1) for key, value in sorted(stats.items())}
 
 
 def average_queue_length(data, runtime):
@@ -175,19 +175,19 @@ def standard_deviation_queue_length(data, _average_queue_length, runtime):
     return sqrt(queue_len)
 
 
-# average size of packages ->send<-
-def average_packet_size(pop):
+# average size of packages ->received<-
+def average_packet_size(append):
     package_length = 0
-    package_count = pop.__len__()
-    for package in pop:
+    package_count = append.__len__()
+    for package in append:
         package_length += package[2].__len__() / package_count
     return package_length
 
 
-def standard_deviation_packet_size(pop, _average_packet_size):
+def standard_deviation_packet_size(append, _average_packet_size):
     package_length = 0
-    package_count = pop.__len__() - 1
-    for package in pop:
+    package_count = append.__len__() - 1 if append.__len__() > 1 else 1
+    for package in append:
         package_length += pow(package[2].__len__() - _average_packet_size, 2) / package_count
     return sqrt(package_length)
 
@@ -206,8 +206,8 @@ def parse_switch_buffer(buffer, runtime, interface, bandwidth):
     _average_waiting_time = average_waiting_time(append, pop)
     _standard_deviation_waiting_time = standard_deviation_waiting_time(append, pop, _average_waiting_time)
 
-    _average_packet_size = average_packet_size(pop)
-    _standard_deviation_packet_size = standard_deviation_packet_size(pop, _average_packet_size)
+    _average_packet_size = average_packet_size(append)
+    _standard_deviation_packet_size = standard_deviation_packet_size(append, _average_packet_size)
 
     append_pop = append + pop
 

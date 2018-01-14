@@ -104,12 +104,18 @@ class PackageInjector(Node):
     def get_monitor_results(self):
         self.packages.sort(reverse=True, key=lambda p: p.latency)
         _destination_reached_count = destination_reached_count(self.packages)
+        if _destination_reached_count == 0:
+            _average_package_latency = -1
+            _standard_deviation_latency = -1
+        else:
+            _average_package_latency = average_package_latency(self.packages, _destination_reached_count)
+            _standard_deviation_latency = standard_deviation_latency(self.packages, _average_package_latency,
+                                                                     _destination_reached_count)
         _average_packet_size = average_packet_size(self.packages)
         _standard_deviation_packet_size = standard_deviation_packet_size(self.packages, _average_packet_size)
-        _average_package_latency = average_package_latency(self.packages, _destination_reached_count)
-        _standard_deviation_latency = standard_deviation_latency(self.packages, _average_package_latency,
-                                                                 _destination_reached_count)
-        results = {"average_packet_size": _average_packet_size,
+        results = {"packages_injected": self.packages.__len__(),
+                   "packages_destination_reached": _destination_reached_count,
+                   "average_packet_size": _average_packet_size,
                    "standard_deviation_packet_size": _standard_deviation_packet_size,
                    "average_package_latency": _average_package_latency,
                    "standard_deviation_latency": _standard_deviation_latency}
@@ -141,7 +147,7 @@ def average_packet_size(packages):
 
 def standard_deviation_packet_size(packages, _average_packet_size):
     sd_package_length = 0
-    package_count = packages.__len__() - 1
+    package_count = packages.__len__() - 1 if packages.__len__() > 1 else 1
     for package in packages:
         sd_package_length += pow(package.__len__() - _average_packet_size, 2) / package_count
     return sqrt(sd_package_length)
@@ -170,7 +176,7 @@ def average_package_latency(packages, package_count):
 # packages: list of MonitoredPackage's
 # must be sorted by latency in reversed order
 def standard_deviation_latency(packages, _average_package_latency, package_count):
-    package_count -= 1
+    package_count -= 1 if package_count > 1 else 0
     sd_package_latency = 0
     for package in packages:
         if package.latency < 0:

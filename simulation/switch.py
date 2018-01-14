@@ -71,20 +71,34 @@ class Switch(Node):
         for interface, interface_module in self.interface_modules.items():
             append = interface_module[0].data["append"]
             pop = interface_module[0].data["pop"]
+            if append.__len__() > 0:
+                if pop.__len__() > 0:
+                    # average_waiting_time = Zeit seid Betreten des Swichtes bis zum Verlassen
+                    # (inklusive Übertragungsdauer)
+                    _average_waiting_time = average_waiting_time(append, pop)
+                    _standard_deviation_waiting_time = standard_deviation_waiting_time(append, pop,
+                                                                                       _average_waiting_time)
+                else:
+                    _average_waiting_time = -1
+                    _standard_deviation_waiting_time = -1
+                _average_packet_size = average_packet_size(append)
+                _standard_deviation_packet_size = standard_deviation_packet_size(append, _average_packet_size)
 
-            # average_waiting_time = Zeit seid Betreten des Swichtes bis zum Verlassen (inklusive Übertragungsdauer)
-            _average_waiting_time = average_waiting_time(append, pop)
-            _standard_deviation_waiting_time = standard_deviation_waiting_time(append, pop, _average_waiting_time)
+                append_pop = append + pop
 
-            _average_packet_size = average_packet_size(pop)
-            _standard_deviation_packet_size = standard_deviation_packet_size(pop, _average_packet_size)
-
-            append_pop = append + pop
-
-            _average_queue_length = average_queue_length(append_pop, self.env.now)
-            _standard_deviation_queue_length = standard_deviation_queue_length(append_pop, _average_queue_length,
-                                                                               self.env.now)
-            sub_result = {"average_waiting_time": _average_waiting_time,
+                _average_queue_length = average_queue_length(append_pop, self.env.now)
+                _standard_deviation_queue_length = standard_deviation_queue_length(append_pop, _average_queue_length,
+                                                                                   self.env.now)
+            else:
+                _average_waiting_time = -1
+                _standard_deviation_waiting_time = -1
+                _average_packet_size = -1
+                _standard_deviation_packet_size = -1
+                _average_queue_length = -1
+                _standard_deviation_queue_length = -1
+            sub_result = {"packages_received": append.__len__(),
+                          "packages_send": pop.__len__(),
+                          "average_waiting_time": _average_waiting_time,
                           "standard_deviation_waiting_time": _standard_deviation_waiting_time,
                           "average_queue_length": _average_queue_length,
                           "standard_deviation_queue_length": _standard_deviation_queue_length,
@@ -128,10 +142,10 @@ class Switch(Node):
                 yield self.sleep_event
             except simpy.Interrupt:
                 sending_package = buffer.next_package()
-                sending_event, inspector = self.pop(sending_package, interface, 0, True)
+                sending_event, inspector = self.pop(sending_package, interface, inspector=True)
         else:
             sending_package = buffer.next_package()
-            sending_event, inspector = self.pop(sending_package, interface, True)
+            sending_event, inspector = self.pop(sending_package, interface, inspector=True)
         while True:
             try:
                 if not buffer.empty() or not sending_event.processed:
@@ -143,7 +157,7 @@ class Switch(Node):
                             self.env.sim_print("%s: %s continued on interface %s" %
                                                (str(self.address), str(sending_package), str(interface)))
                         except KeyError:
-                            sending_event, inspector = self.pop(sending_package, interface, 0, True)
+                            sending_event, inspector = self.pop(sending_package, interface, inspector=True)
                     yield sending_event
                     self.env.sim_print("%s: %s send on interface %s" %
                                        (str(self.address), str(sending_package), str(interface)))
@@ -164,5 +178,6 @@ class Switch(Node):
                     sending_package = package
                     # the receiver needs to know that a new package is incoming (with a byte sequence)
                     # this is modeled by adding some extra bytes to this package
-                    sending_event, inspector = self.pop(sending_package, interface, self.env.preemption_penalty_bytes,
-                                                        True)
+                    sending_event, inspector = self.pop(sending_package, interface,
+                                                        extra_bytes=self.env.preemption_penalty_bytes,
+                                                        inspector=True)

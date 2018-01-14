@@ -6,9 +6,11 @@ class NetworkEnvironment(simpy.Environment):
     # Speed of light in m/µs : 299.792
     # {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792, "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
     # channel_types = { type: physical_travel_factor (in m/µs) }
-    def __init__(self, channel_types=None, verbose=True, min_preemption_bytes=80, preemption_penalty_bytes=8, *args,
+    def __init__(self, name="no name", channel_types=None, verbose=True, min_preemption_bytes=80,
+                 preemption_penalty_bytes=8, *args,
                  **kwargs):
         super(NetworkEnvironment, self).__init__(*args, **kwargs)
+        self.name = name
         self.verbose = verbose
         self.min_preemption_bytes = min_preemption_bytes if min_preemption_bytes > 0 else 1
         self.preemption_penalty_bytes = preemption_penalty_bytes
