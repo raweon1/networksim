@@ -58,13 +58,13 @@ def foo3(intensity, bandwidth=10, preemption=False, min_preemption_bytes=250, pr
                                  preemption_penalty_bytes=preemption_penalty_bytes,
                                  min_preemption_bytes=min_preemption_bytes)
         builder = env.builder
-        monitored_injector = PackageInjector(env, "Injector", "Switch", bandwidth, exp_generator(intensity),
-                                             some_package_generator(env, "Injector", "Sink", priority=0), True)
+        monitored_node = Flow2(env, "Source", some_package_generator(env, "Source", "Sink", priority=0), monitor=True)
         jitter_injector = PackageInjector(env, "Jitter", "Switch", bandwidth, exp_generator(intensity),
                                           some_package_generator(env, "Injector", "Sink", priority=1), False)
         switch = Switch(env, "Switch", buffer_type=Priority_FCFS_Scheduler, preemption=preemption, monitor=True)
         sink = SinglePacket(env, "Sink", "broadcast", 0, 0)
-        builder.append_nodes(monitored_injector, jitter_injector, switch, sink)
+        builder.append_nodes(monitored_node, jitter_injector, switch, sink)
+        builder.connect_nodes(monitored_node, switch, bandwidth)
         builder.connect_nodes(switch, sink, bandwidth=bandwidth * 2)
         yield env
 
@@ -79,6 +79,6 @@ def nice_output(sim_env):
 # print(json.dumps(result, indent=2))
 
 # result = simulate_same_multiple(foo3(0.5), 15, 1000000, 0.95)
-result = simulate_multiple([foo3(i / 10, preemption=True, min_preemption_bytes=1) for i in range(1, 11)],
-                           15, 1000000, 0.95)
-print(json.dumps(result, indent=2))
+# print(result)
+# result = simulate_multiple([foo3(i / 10, preemption=True, min_preemption_bytes=1) for i in range(1, 11)], 15, 1000000, 0.95)
+# print(json.dumps(result, indent=2))

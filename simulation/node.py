@@ -90,6 +90,45 @@ class SinglePacket(Node):
         yield self.pop(package, self.interfaces[0])
 
 
+class Flow2(Node):
+    def __init__(self, env, address, package_generator, monitor=False):
+        super(Flow2, self).__init__(env, address, monitor)
+        self.package_generator = package_generator
+        self.packages = []
+        self.process = env.process(self.run())
+
+    def get_monitor_results(self):
+        self.packages.sort(reverse=True, key=lambda p: p.latency)
+        _destination_reached_count = destination_reached_count(self.packages)
+        if _destination_reached_count == 0:
+            _average_package_latency = -1
+            _standard_deviation_latency = -1
+        else:
+            _average_package_latency = average_package_latency(self.packages, _destination_reached_count)
+            _standard_deviation_latency = standard_deviation_latency(self.packages, _average_package_latency,
+                                                                     _destination_reached_count)
+        _average_packet_size = average_packet_size(self.packages)
+        _standard_deviation_packet_size = standard_deviation_packet_size(self.packages, _average_packet_size)
+        results = {"packages_injected": self.packages.__len__(),
+                   "packages_destination_reached": _destination_reached_count,
+                   "average_packet_size": _average_packet_size,
+                   "standard_deviation_packet_size": _standard_deviation_packet_size,
+                   "average_package_latency": _average_package_latency,
+                   "standard_deviation_package_latency": _standard_deviation_latency}
+        return results
+
+    def run(self):
+        while True:
+            try:
+                package = self.package_generator.__next__()
+            except StopIteration:
+                self.env.stop()
+                break
+            if self.monitor:
+                self.packages.append(package)
+            yield self.pop(package, self.interfaces[0])
+
+
 class PackageInjector(Node):
     def __init__(self, env, address, injection_target_address, bandwidth,
                  intensity_generator, package_generator, monitor=False):
@@ -118,7 +157,7 @@ class PackageInjector(Node):
                    "average_packet_size": _average_packet_size,
                    "standard_deviation_packet_size": _standard_deviation_packet_size,
                    "average_package_latency": _average_package_latency,
-                   "standard_deviation_latency": _standard_deviation_latency}
+                   "standard_deviation_package_latency": _standard_deviation_latency}
         return results
 
     def run(self):
