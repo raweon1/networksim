@@ -57,7 +57,7 @@ class FCFS_Buffer(SwitchBuffer):
         self.queue.append(package)
 
     def remove(self, package):
-        self.queue.popleft()
+        self.queue.remove(package)
 
     def empty(self):
         return self.queue.__len__() == 0
@@ -77,7 +77,7 @@ class LCFS_Buffer(SwitchBuffer):
         self.queue.append(package)
 
     def remove(self, package):
-        self.queue.pop()
+        self.queue.remove(package)
 
     def empty(self):
         return self.queue.__len__() == 0

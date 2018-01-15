@@ -29,6 +29,7 @@ def foo():
 
 def some_package_generator(env, source, destination, payload=750, priority=1):
     while True:
+        payload = np.random.uniform(250, 1300)
         yield MonitoredPackage(env, source, destination, payload, priority)
 
 
@@ -49,7 +50,7 @@ def foo2():
         yield env
 
 
-def foo3(intensity, bandwidth=10, preemption=False, min_preemption_bytes=250, preemption_penalty_bytes=0):
+def foo3(intensity, switch_buffer=Priority_FCFS_Scheduler, bandwidth=10, preemption=False, min_preemption_bytes=250, preemption_penalty_bytes=0):
     while True:
         some_channel_types = {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792,
                               "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
@@ -61,7 +62,7 @@ def foo3(intensity, bandwidth=10, preemption=False, min_preemption_bytes=250, pr
         monitored_node = Flow2(env, "Source", some_package_generator(env, "Source", "Sink", priority=0), monitor=True)
         jitter_injector = PackageInjector(env, "Jitter", "Switch", bandwidth, exp_generator(intensity),
                                           some_package_generator(env, "Injector", "Sink", priority=1), False)
-        switch = Switch(env, "Switch", buffer_type=Priority_FCFS_Scheduler, preemption=preemption, monitor=True)
+        switch = Switch(env, "Switch", buffer_type=switch_buffer, preemption=preemption, monitor=True)
         sink = SinglePacket(env, "Sink", "broadcast", 0, 0)
         builder.append_nodes(monitored_node, jitter_injector, switch, sink)
         builder.connect_nodes(monitored_node, switch, bandwidth)

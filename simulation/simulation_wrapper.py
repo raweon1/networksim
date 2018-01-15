@@ -28,11 +28,14 @@ def default_callback(sim_env):
     print(sim_env.get_monitor_results())
 
 
-def simulate_in_steps(simulation_generator, step_count, runtime, callback=default_callback):
+def simulate_in_steps(simulation_generator, step_count, runtime, callback=default_callback, args=None):
     sim_env = simulation_generator.__next__()
     for i in range(1, step_count + 1):
         sim_env.run(runtime * i)
-        callback(sim_env)
+        if args is not None:
+            callback(sim_env, *args)
+        else:
+            callback(sim_env)
     return sim_env.get_monitor_results()
 
 
