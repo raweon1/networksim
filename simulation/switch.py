@@ -7,7 +7,7 @@ class Switch(Node):
     # aging_time in seconds
     def __init__(self, env, address, buffer_type=FCFS_Buffer, aging_time=-1, preemption=False, monitor=False):
         super(Switch, self).__init__(env, address, monitor)
-        # must be a subclass of SwitchBuffer - important: cannot be an instance of SwitchBuffer!
+        # must be a subclass of SwitchBuffer - iminterfaceant: cannot be an instance of SwitchBuffer!
         self.buffer_type = buffer_type
         # time until entries in switch_table become invalid, input in seconds -> x1.000.000 for µs
         self.aging_time = aging_time * 1000000 if aging_time > 0 else aging_time
@@ -23,26 +23,39 @@ class Switch(Node):
 
     def on_package_received(self, package, interface_in):
         self.env.sim_print("%s: %s received on interface %s" % (str(self.address), str(package), str(interface_in)))
-        # create entry in switch_table
-        self.switch_table[package.source] = [interface_in, self.env.now]
-        # valid switch_table entry -> add package to buffer of interface x
-        # invalid switch_table entry -> broadcast package
-        # interface_out = interface_in -> discard package
-        try:
-            destination_entry = self.switch_table[package.destination]
-            # entry to old | aging_time < 0 -> ignore aging_time
-            if self.aging_time > 0 and self.env.now > destination_entry[1] + self.aging_time:
-                self.broadcast_package(package, interface_in)
-                del self.switch_table[package.destination]
-            else:
-                # destination_entry[0] = interface_out
-                if interface_in == destination_entry[0]:
-                    self.on_package_discard(package)
+        if not self.stream_package(package):
+            # create entry in switch_table
+            self.switch_table[package.source] = [interface_in, self.env.now]
+            # valid switch_table entry -> add package to buffer of interface x
+            # invalid switch_table entry -> broadcast package
+            # interface_out = interface_in -> discard package
+            try:
+                destination_entry = self.switch_table[package.destination]
+                # entry to old | aging_time < 0 -> ignore aging_time
+                if self.aging_time > 0 and self.env.now > destination_entry[1] + self.aging_time:
+                    self.broadcast_package(package, interface_in)
+                    del self.switch_table[package.destination]
                 else:
-                    self.interface_modules[destination_entry[0]][0].append_package(package)
-                    self.interface_modules[destination_entry[0]][1].interrupt("new package")
+                    # destination_entry[0] = interface_out
+                    if interface_in == destination_entry[0]:
+                        self.on_package_discard(package)
+                    else:
+                        self.interface_modules[destination_entry[0]][0].append_package(package)
+                        self.interface_modules[destination_entry[0]][1].interrupt("new package")
+            except KeyError:
+                self.broadcast_package(package, interface_in)
+
+    def stream_package(self, package):
+        try:
+            stream = self.env.streams[package.destination]
+            interfaces = stream[self.address]
+            for interface, pop in interfaces.items():
+                if pop == 1:
+                    self.interface_modules[interface][0].append_package(package)
+                    self.interface_modules[interface][1].interrupt("new package")
+            return True
         except KeyError:
-            self.broadcast_package(package, interface_in)
+            return False
 
     def broadcast_package(self, package, source_interface):
         self.env.sim_print("%s: %s broadcasting" % (str(self.address), str(package)))

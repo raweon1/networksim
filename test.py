@@ -2,14 +2,15 @@ import matplotlib.pyplot as plt
 from main import foo3
 from simulation.simulation_wrapper import *
 from time import time
-from threading import Thread, main_thread
+import json
 from multiprocessing import Process, Queue
 from simulation.switch_buffer import *
 
 
 # title = "average_package_latency"
 # title = "standard_deviation_package_latency"
-title = "average_waiting_time"
+# title = "average_waiting_time"
+title = "packages_send"
 
 
 def foo(data, name=""):
@@ -31,7 +32,7 @@ def bar(data, name=""):
     y = defaultdict(list)
     yerr = defaultdict(list)
     for sim_name, sim_data in data.items():
-        for priority, latency in sim_data["Switch"][2][title].items():
+        for priority, latency in sim_data["Switch"][4][title].items():
             x[priority].append(float(sim_name[11:]))
             y[priority].append(latency["average"])
             yerr[priority].append(latency["average"] - latency["lower"])
@@ -92,7 +93,7 @@ def c():
     if __name__ == '__main__':
         runtime = 1000000
         q = Queue()
-        t1 = Process(target=run, args=(False, 1, 0, Priority_FCFS_Scheduler, 1, 16, runtime, 0.95, "Priority_FCFS_Scheduler", q))
+        t1 = Process(target=run, args=(True, 1, 0, Priority_FCFS_Scheduler, 1, 16, runtime, 0.95, "Priority_FCFS_Scheduler", q))
         t2 = Process(target=run, args=(False, 1, 0, FCFS_Buffer, 1, 16, runtime, 0.95, "FCFS_Buffer", q))
         t3 = Process(target=run, args=(False, 1, 0, LCFS_Buffer, 1, 16, runtime, 0.95, "LCFS_Buffer", q))
         # t4 = Process(target=run, args=(False, 1, 0, 16, runtime, 0.95, "Preemption 500, 0", q))
@@ -104,7 +105,8 @@ def c():
         start_time = time()
         for thread in threads:
             result = q.get()
-            bar(result[1], result[0])
+            foo(result[1], result[0])
+            print(json.dumps(result[1], indent=2))
         for thread in threads:
             thread.join()
         print("all done in %0.2f" % (time() - start_time))
@@ -134,4 +136,7 @@ def b(intensity=0.5):
 
 
 c()
-
+#gen = foo3(0.5)
+#sim = gen.__next__()
+#sim.run(100000)
+#print(sim.get_monitor_results())

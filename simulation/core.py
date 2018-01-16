@@ -17,6 +17,7 @@ class NetworkEnvironment(simpy.Environment):
         self.builder = NetworkBuilder(channel_types)
         self.nodes = self.builder.nodes
         self.table = self.builder.table
+        self.streams = self.builder.streams
         self.stop_event = self.event()
         self.sleep_event = self.event()
 
@@ -89,7 +90,7 @@ class NetworkEnvironment(simpy.Environment):
 
 
 class NetworkBuilder(object):
-    def __init__(self, channel_types):
+    def __init__(self, channel_types=None):
         # channel_types = { type: physical_travel_factor }
         # physical_travel_factor in m/µs
         self.channel_types = channel_types
@@ -97,6 +98,8 @@ class NetworkBuilder(object):
         self.nodes = {}
         # {source: {interface_out: [destination, interface_in, bandwidth, physical_delay] }}
         self.table = defaultdict(dict)
+        # {stream_address: {switch_address: {port: 0/1}}}
+        self.streams = {}
 
     # time one bit takes to travel the physical layer
     def physical_delay(self, channel_type, channel_length):
@@ -124,6 +127,18 @@ class NetworkBuilder(object):
         node_a.add_interface(interface_a)
         node_b.add_interface(interface_b)
         return self
+
+    def create_stream(self, address, *switch_connections):
+        self.streams[address] = defaultdict(dict)
+        stream = self.streams[address]
+        for switch_connection in switch_connections:
+            switch = switch_connection[0]
+            for port in self.table[switch.address]:
+                if self.nodes[self.table[switch.address][port][0]] in switch_connection[1]:
+                    stream[switch.address][port] = 1
+                else:
+                    stream[switch.address][port] = 0
+        return stream
 
 
 class SendingProcessInspector(object):

@@ -13,6 +13,8 @@ class Node(object):
 
     def on_package_received(self, package, interface_in):
         self.env.sim_print("%s: %s received on interface %s" % (str(self.address), str(package), str(interface_in)))
+        if package.destination in self.env.streams:
+            package.on_destination_reached(self)
 
     def on_package_sending(self, package, interface_out):
         self.env.sim_print("%s: %s sending on interface %s" % (str(self.address), str(package), str(interface_out)))
@@ -109,7 +111,7 @@ class Flow2(Node):
                                                                      _destination_reached_count)
         _average_packet_size = average_packet_size(self.packages)
         _standard_deviation_packet_size = standard_deviation_packet_size(self.packages, _average_packet_size)
-        results = {"packages_injected": self.packages.__len__(),
+        results = {"packages_send": self.packages.__len__(),
                    "packages_destination_reached": _destination_reached_count,
                    "average_packet_size": _average_packet_size,
                    "standard_deviation_packet_size": _standard_deviation_packet_size,

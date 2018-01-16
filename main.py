@@ -59,14 +59,18 @@ def foo3(intensity, switch_buffer=Priority_FCFS_Scheduler, bandwidth=10, preempt
                                  preemption_penalty_bytes=preemption_penalty_bytes,
                                  min_preemption_bytes=min_preemption_bytes)
         builder = env.builder
-        monitored_node = Flow2(env, "Source", some_package_generator(env, "Source", "Sink", priority=0), monitor=True)
-        jitter_injector = PackageInjector(env, "Jitter", "Switch", bandwidth, exp_generator(intensity),
-                                          some_package_generator(env, "Injector", "Sink", priority=1), False)
+        monitored_node = Flow2(env, "Source", some_package_generator(env, "Source", "wololo", priority=0), monitor=True)
+        # jitter_injector = PackageInjector(env, "Jitter", "Switch", bandwidth, exp_generator(intensity),
+        #                                  some_package_generator(env, "Injector", "Sink", priority=1), False)
+        sender1 = Flow2(env, "Sender1", some_package_generator(env, "Sender1", "wololo", priority=1), monitor=False)
+        sender2 = Flow2(env, "Sender2", some_package_generator(env, "Sender2", "wololo", priority=1), monitor=False)
         switch = Switch(env, "Switch", buffer_type=switch_buffer, preemption=preemption, monitor=True)
         sink = SinglePacket(env, "Sink", "broadcast", 0, 0)
-        builder.append_nodes(monitored_node, jitter_injector, switch, sink)
-        builder.connect_nodes(monitored_node, switch, bandwidth)
-        builder.connect_nodes(switch, sink, bandwidth=bandwidth * 2)
+        builder.append_nodes(monitored_node, sender1, sender2, switch, sink)
+        builder.connect_nodes(monitored_node, switch, bandwidth=bandwidth*intensity)
+        builder.connect_nodes(sender1, switch, bandwidth=bandwidth*intensity).connect_nodes(sender2, switch, bandwidth=bandwidth*intensity)
+        builder.connect_nodes(switch, sink, bandwidth=bandwidth * 3)
+        builder.create_stream("wololo", (switch, [sink]))
         yield env
 
 
@@ -83,3 +87,4 @@ def nice_output(sim_env):
 # print(result)
 # result = simulate_multiple([foo3(i / 10, preemption=True, min_preemption_bytes=1) for i in range(1, 11)], 15, 1000000, 0.95)
 # print(json.dumps(result, indent=2))
+
