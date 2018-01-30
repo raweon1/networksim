@@ -1,5 +1,7 @@
 from math import sqrt
 from scipy import stats
+from collections import defaultdict
+import csv
 
 
 def simulate_multiple(simulation_generator_list, count, runtime, confidence_coefficient):
@@ -7,6 +9,40 @@ def simulate_multiple(simulation_generator_list, count, runtime, confidence_coef
     for simulation_generator in simulation_generator_list:
         results.update(simulate_same_multiple(simulation_generator, count, runtime, confidence_coefficient))
     return results
+
+
+def write_csv(file_name, result):
+    for count, table in enumerate(result.values()):
+        with open("%s_%d.csv" % (file_name, count), "w", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=table[0].keys(), delimiter=",", lineterminator="\n")
+            writer.writeheader()
+            for row in table:
+                writer.writerow(row)
+
+
+def simulate_multiple_csv(simulation_generator_list, count, runtime, file_name=None):
+    result = defaultdict(list)
+    for simulation_generator in simulation_generator_list:
+        sub_result = simulate_same_multiple_csv(simulation_generator, count, runtime)
+        for key, table in sub_result.items():
+            result[key] += table
+    if file_name is not None:
+        write_csv(file_name, result)
+    return result
+
+
+def simulate_same_multiple_csv(simulation_generator, count, runtime, file_name=None):
+    result = defaultdict(list)
+    for i in range(0, count):
+        sim_env = simulation_generator.__next__()
+        sim_env.run(runtime)
+        result_tables = sim_env.get_monitor_tables()
+        # table = list of dicts, key = concatenation of keys from the dict
+        for key, table in result_tables.items():
+            result[key] += table
+    if file_name is not None:
+        write_csv(file_name, result)
+    return result
 
 
 def simulate_same_multiple(simulation_generator, count, runtime, confidence_coefficient, return_singles=False):
