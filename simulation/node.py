@@ -17,7 +17,7 @@ class Node(object):
     def on_frame_sending(self, frame, port_out):
         self.env.sim_print("%s: %s sending on port %s" % (str(self.address), str(frame), str(port_out)))
 
-    def on_port_added(self, port):
+    def on_port_added(self, port, bandwidth, *args):
         pass
 
     def get_monitor_table(self):
@@ -37,9 +37,9 @@ class Node(object):
         self.on_frame_sending(frame, port_out)
         return send_event
 
-    def add_port(self, port):
+    def add_port(self, port, bandwidth, *args):
         self.ports.append(port)
-        self.on_port_added(port)
+        self.on_port_added(port, bandwidth, *args)
 
     def __str__(self):
         return str(self.address)
@@ -51,7 +51,7 @@ class Flow(Node):
         self.destination = destination_address
         self.processes = []
 
-    def on_port_added(self, port):
+    def on_port_added(self, port, bandwidth, *args):
         self.processes.append(self.env.process(self.run(port)))
 
     def run(self, port):
@@ -71,21 +71,15 @@ class Sink(Node):
     def __init__(self, env, address):
         super(Sink, self).__init__(env, address)
 
-    def on_port_added(self, port):
-        pass
-
 
 class SinglePacket(Node):
-    def __init__(self, env, address, destination_address, payload, wait_until, priority=20):
+    def __init__(self, env, address, destination_address, payload, wait_until, priority=7):
         super(SinglePacket, self).__init__(env, address)
         self.destination = destination_address
         self.payload = payload
         self.priority = priority
         self.wait_until = wait_until
         self.process = env.process(self.run())
-
-    def on_port_added(self, port):
-        pass
 
     def run(self):
         yield self.env.timeout(self.wait_until)

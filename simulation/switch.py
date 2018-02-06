@@ -1,14 +1,69 @@
 from simulation.core import *
 from simulation.node import Node
 from simulation.switch_buffer import *
+from simulation.switch_buffer import StrictPriorityAlgorithm, CreditBasedShaper
+
+
+class PriorityMap(object):
+    # number of available traffic classes x priority = traffic class
+    # see 802.1Q page: 126
+    map = [[0, 0, 0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 1, 1, 1, 1],
+           [0, 0, 0, 0, 1, 1, 2, 2],
+           [0, 0, 1, 1, 2, 2, 3, 3],
+           [0, 0, 1, 1, 2, 2, 3, 4],
+           [1, 0, 2, 2, 3, 3, 4, 5],
+           [1, 0, 2, 3, 4, 4, 5, 6],
+           [1, 0, 2, 3, 4, 5, 6, 7]]
+
+    def __init__(self, available_traffic_classes=8):
+        self.available_traffic_classes = available_traffic_classes - 1
+
+    # args = list of tuples of (priority, traffic_class)
+    def map_priority_traffic_class(self, priority, traffic_class):
+        self.map[self.available_traffic_classes][priority] = traffic_class
+
+    def get_traffic_class(self, priority):
+        return self.map[self.available_traffic_classes][priority]
+
+
+class TransmissionSelectionAlgorithmMap(object):
+    strict_priority = StrictPriorityAlgorithm
+    credit_based_shaper = CreditBasedShaper
+
+    def __init__(self, available_traffic_classes=8):
+        self.transmission_selection_algorithm_per_traffic_class = []
+        for i in range(0, available_traffic_classes):
+            self.transmission_selection_algorithm_per_traffic_class.append(
+                TransmissionSelectionAlgorithmMap.strict_priority)
+
+    # arg = list of tuples of (traffic_class, transmission_selection_algorithm)
+    def map_traffic_class_transmission_selection_algorithm(self, traffic_class, tsa):
+        self.transmission_selection_algorithm_per_traffic_class[traffic_class] = tsa
+
+
+class TrafficClassBandwidthMap(object):
+    def __init__(self, available_traffic_classes=8):
+        self.bandwidth_param = []
+        for i in range(0, available_traffic_classes):
+            self.bandwidth_param.append(0)
+
+    # arg = list of tuples of (traffic_class, bandwidth usage in %)
+    def map_traffic_class_bandwidth(self, traffic_class, delta_bandwidth):
+        self.bandwidth_param[traffic_class] = delta_bandwidth
+
+
+class SwitchPortParam(object):
+    def __init__(self, available_traffic_classes=8):
+        self.priority_map = PriorityMap(available_traffic_classes)
+        self.tsa_map = TransmissionSelectionAlgorithmMap(available_traffic_classes)
+        self.tsa_bandwidth = TrafficClassBandwidthMap(available_traffic_classes)
 
 
 class Switch(Node):
     # aging_time in seconds
-    def __init__(self, env, address, buffer_type=FCFS_Buffer, aging_time=-1, preemption=False, monitor=False):
+    def __init__(self, env, address, aging_time=-1, preemption=False, monitor=False):
         super(Switch, self).__init__(env, address, monitor)
-        # must be a subclass of SwitchBuffer - important: cannot be an instance of SwitchBuffer!
-        self.buffer_type = buffer_type
         # time until entries in switch_table become invalid, input in seconds -> x1.000.000 for µs
         self.aging_time = aging_time * 1000000 if aging_time > 0 else aging_time
         # activate preemption for this Switch
@@ -55,11 +110,14 @@ class Switch(Node):
     def on_frame_discard(self, frame):
         self.env.sim_print("%s: %s discarded" % (str(self.address), str(frame)))
 
-    def on_port_added(self, port):
-        if self.monitor:
-            switch_buffer = MonitoredSwitchBuffer(self.env, self.buffer_type())
+    # switch param = (PrioMap, TSAMap, TSAConfig)
+    def on_port_added(self, port, bandwidth, *args):
+        if args.__len__() == 0:
+            switch_param = SwitchPortParam()
         else:
-            switch_buffer = self.buffer_type()
+            switch_param = args[0]
+        switch_buffer = SwitchBuffer(self.env, bandwidth, switch_param.priority_map, switch_param.tsa_map,
+                                     switch_param.tsa_bandwidth, self.monitor)
         if self.preemption:
             self.port_modules[port] = [switch_buffer, self.env.process(
                 self.preemption_run(port, switch_buffer))]
@@ -131,75 +189,93 @@ class Switch(Node):
 
     def run(self, port, buffer):
         frame = None
-        if buffer.empty():
-            try:
-                yield self.sleep_event
-            except simpy.Interrupt:
-                frame = buffer.next_frame()
-                sending_event = self.pop(frame, port)
-        else:
-            frame = buffer.next_frame()
-            sending_event = self.pop(frame, port)
+        sending_event = None
         while True:
             try:
-                if not buffer.empty() or not sending_event.processed:
+                if frame is not None:
                     if sending_event.processed:
-                        frame = buffer.next_frame()
+                        # get new frame
+                        frame = buffer.peek_next_frame()
+                        if frame is not None:
+                            sending_event = self.pop(frame, port)
+                    else:
+                        # wait until frame is transmitted
+                        buffer.transmission_start(frame)
+                        yield sending_event
+                        buffer.transmission_done(frame)
+                        self.env.sim_print("%s: %s send on port %s" %
+                                           (str(self.address), str(frame), str(port)))
+                elif not buffer.empty():
+                    # there might be a new frame to transmit
+                    frame = buffer.peek_next_frame()
+                    if frame is not None:
                         sending_event = self.pop(frame, port)
-                    yield sending_event
-                    self.env.sim_print("%s: %s send on port %s" %
-                                       (str(self.address), str(frame), str(port)))
-                    buffer.remove(frame)
+                    else:
+                        # no frame to transmit
+                        yield self.sleep_event
                 else:
+                    # no frame to transmit
                     yield self.sleep_event
             except simpy.Interrupt:
                 pass
 
     def preemption_run(self, port, buffer):
         pending_events = {}
-        sending_frame = None
+        frame = None
+        sending_event = None
         inspector = None
-        if buffer.empty():
-            try:
-                yield self.sleep_event
-            except simpy.Interrupt:
-                sending_frame = buffer.next_frame()
-                sending_event, inspector = self.pop(sending_frame, port, inspector=True)
-        else:
-            sending_frame = buffer.next_frame()
-            sending_event, inspector = self.pop(sending_frame, port, inspector=True)
         while True:
             try:
-                if not buffer.empty() or not sending_event.processed:
+                if frame is not None:
                     if sending_event.processed:
-                        sending_frame = buffer.next_frame()
+                        # get a new frame
+                        frame = buffer.peek_next_frame()
+                        if frame is not None:
+                            try:
+                                sending_event, inspector = pending_events[frame]
+                                sending_event.interrupt("continue sending")
+                                self.env.sim_print("%s: %s continued on port %s" %
+                                                   (str(self.address), str(frame), str(port)))
+                            except KeyError:
+                                sending_event, inspector = self.pop(frame, port, inspector=True)
+                    else:
+                        buffer.transmission_start(frame)
+                        yield sending_event
+                        buffer.transmission_done(frame)
+                        pending_events.pop(frame, None)
+                        self.env.sim_print("%s: %s send on port %s" %
+                                           (str(self.address), str(frame), str(port)))
+                elif not buffer.empty():
+                    # there might be a frame for transmission
+                    frame = buffer.peek_next_frame()
+                    if frame is not None:
                         try:
-                            sending_event, inspector = pending_events[sending_frame]
+                            sending_event, inspector = pending_events[frame]
                             sending_event.interrupt("continue sending")
                             self.env.sim_print("%s: %s continued on port %s" %
-                                               (str(self.address), str(sending_frame), str(port)))
+                                               (str(self.address), str(frame), str(port)))
                         except KeyError:
-                            sending_event, inspector = self.pop(sending_frame, port, inspector=True)
-                    yield sending_event
-                    self.env.sim_print("%s: %s send on port %s" %
-                                       (str(self.address), str(sending_frame), str(port)))
-                    pending_events.pop(sending_frame, None)
-                    buffer.remove(sending_frame)
+                            sending_event, inspector = self.pop(frame, port, inspector=True)
+                    else:
+                        # there is no frame for transmission
+                        yield self.sleep_event
                 else:
+                    # there is no frame for transmission
                     yield self.sleep_event
             except simpy.Interrupt:
-                frame = buffer.next_frame()
-                # inspector.finish_time - self.env.now > 50 prevents a bug when we try to interrupt an event that would
-                # be processed at the same time (e.g. the frame will be sent at the same time)
-                # and it isn't useful to interrupt a frame which will be finished in sub 50 µs
-                if frame != sending_frame and not sending_event.processed and inspector.process_interruptable():
-                    pending_events[sending_frame] = sending_event, inspector
-                    sending_event.interrupt("stop sending")
-                    self.env.sim_print(
-                        "%s: %s stopped on port %s" % (str(self.address), str(sending_frame), str(port)))
-                    sending_frame = frame
-                    # the receiver needs to know that a new frame is incoming (with a byte sequence)
-                    # this is modeled by adding some extra bytes to this frame
-                    sending_event, inspector = self.pop(sending_frame, port,
-                                                        extra_bytes=self.env.preemption_penalty_bytes,
-                                                        inspector=True)
+                if frame is not None:
+                    new_frame = buffer.peek_next_frame()
+                    # inspector.process_interruptable() prevents a bug when we try to interrupt an event that would
+                    # be processed at the same time (e.g. the frame will be sent at the same time)
+                    if new_frame != frame and not sending_event.processed and inspector.process_interruptable():
+                        pending_events[frame] = sending_event, inspector
+                        sending_event.interrupt("stop sending")
+                        buffer.transmission_pause(frame)
+                        self.env.sim_print(
+                            "%s: %s stopped on port %s" % (str(self.address), str(frame), str(port)))
+                        frame = new_frame
+                        # the receiver needs to know that a new frame is incoming (with a byte sequence)
+                        # this is modeled by adding some extra bytes to this frame
+                        sending_event, inspector = self.pop(frame, port,
+                                                            extra_bytes=self.env.preemption_penalty_bytes,
+                                                            inspector=True)

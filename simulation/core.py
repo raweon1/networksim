@@ -1,7 +1,8 @@
 import simpy
 from collections import defaultdict
-import csv
 import numpy as np
+
+from simulation.switch import Switch
 
 
 class NetworkEnvironment(simpy.Environment):
@@ -141,7 +142,7 @@ class NetworkBuilder(object):
         return self
 
     # bandwidth in Mb/s, channel_length in m
-    def connect_nodes(self, node_a, node_b, bandwidth=10, channel_type=None, channel_length=0):
+    def connect_nodes(self, node_a, node_b, bandwidth=10, channel_type=None, channel_length=0, *switch_params):
         node_a_dict = self.table[node_a.address]
         node_b_dict = self.table[node_b.address]
         port_a = node_a_dict.__len__() + 1
@@ -152,8 +153,19 @@ class NetworkBuilder(object):
         physical_delay = self.physical_delay(channel_type, channel_length)
         node_a_dict[port_a] = [node_b.address, port_b, bandwidth, physical_delay]
         node_b_dict[port_b] = [node_a.address, port_a, bandwidth, physical_delay]
-        node_a.add_port(port_a)
-        node_b.add_port(port_b)
+
+        if isinstance(node_a, Switch) and switch_params.__len__() > 0:
+            node_a.add_port(port_a, bandwidth, switch_params[0])
+            if isinstance(node_b, Switch) and switch_params.__len__() > 1:
+                node_b.add_port(port_b, bandwidth, switch_params[1])
+            else:
+                node_b.add_port(port_b, bandwidth)
+        else:
+            node_a.add_port(port_a, bandwidth)
+            if isinstance(node_b, Switch) and switch_params.__len__() > 0:
+                node_b.add_port(port_b, bandwidth, switch_params[0])
+            else:
+                node_b.add_port(port_b, bandwidth)
 
         self.table2[(node_a.address, node_b.address)] = [bandwidth, physical_delay]
         self.table2[(node_b.address, node_a.address)] = [bandwidth, physical_delay]
