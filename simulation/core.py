@@ -82,10 +82,10 @@ class NetworkEnvironment(simpy.Environment):
             inspector = SendingProcessInspector(self, receiver[2], self.min_preemption_bytes,
                                                 self.preemption_penalty_bytes)
             return self.process(self.send_frame_process(frame, self.nodes[receiver[0]], receiver[1], sending_time,
-                                                          self.nodes[source_address], inspector)), inspector
+                                                        self.nodes[source_address], inspector)), inspector
         else:
             return self.process(self.send_frame_process(frame, self.nodes[receiver[0]], receiver[1], sending_time,
-                                                          self.nodes[source_address]))
+                                                        self.nodes[source_address]))
 
     # do not interrupt this process without an inspector and checking finish_time
     # (this can cause a bug when you interrupt this process at the same time as it would be processed)

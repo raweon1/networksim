@@ -17,7 +17,7 @@ def some_frame_generator(env, source, destination, payload=750, priority=1):
 
 def foo4():
     while True:
-        env = NetworkEnvironment(name="Test", seed=1337, verbose=True)
+        env = NetworkEnvironment(name="Test", seed=1337, verbose=False)
         builder = env.builder
         monitored_node = Flow2(env, "Source", some_frame_generator(env, "Source", "Sink", priority=0), monitor=True)
         sink = SinglePacket(env, "Sink", "broadcast", 0, 0)
@@ -48,5 +48,4 @@ def nice_output(sim_env):
 
 
 # simulate_same_multiple_csv(foo2(), 10, 100000, "foooo")
-env = foo4().__next__()
-simulate_same_multiple_csv(foo4(), 1, 100000, file_name="test")
+simulate_same_multiple_csv(foo4(), 3, 100000, file_name="test")

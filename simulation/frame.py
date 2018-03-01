@@ -10,7 +10,7 @@ class Frame(object):
     each package has a priority
     each package has an automatically generated id
     """
-    def __init__(self, env, source, destination, payload, priority=20, header=(26, "Ethernet_Frame_Header")):
+    def __init__(self, env, source, destination, payload, priority=0, header=(26, "Ethernet_Frame_Header")):
         self.id = env.get_frame_id()
         self.env = env
         self.source = source
