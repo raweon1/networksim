@@ -1,23 +1,36 @@
 import simpy
 from collections import defaultdict
+import numpy as np
+
+from simulation.switch import Switch
 
 
 class NetworkEnvironment(simpy.Environment):
     # Speed of light in m/µs : 299.792
     # {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792, "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
     # channel_types = { type: physical_travel_factor (in m/µs) }
-    def __init__(self, name="no name", channel_types=None, verbose=True, min_preemption_bytes=80,
-                 preemption_penalty_bytes=8, *args,
-                 **kwargs):
+
+    id = {}
+
+    def __init__(self, name="no_name", seed=None, channel_types=None, verbose=True, min_preemption_bytes=80,
+                 preemption_penalty_bytes=8, *args, **kwargs):
         super(NetworkEnvironment, self).__init__(*args, **kwargs)
         self.name = name
+        try:
+            self.id = NetworkEnvironment.id[name]
+            NetworkEnvironment.id[name] += 1
+        except KeyError:
+            self.id = 1
+            NetworkEnvironment.id[name] = 2
+        self.next_frame_id = 0
+        self.random = np.random.RandomState(seed=seed)
+        self.seed = seed if seed is not None else ""
         self.verbose = verbose
         self.min_preemption_bytes = min_preemption_bytes if min_preemption_bytes > 0 else 1
         self.preemption_penalty_bytes = preemption_penalty_bytes
         self.builder = NetworkBuilder(channel_types)
         self.nodes = self.builder.nodes
         self.table = self.builder.table
-        self.streams = self.builder.streams
         self.stop_event = self.event()
         self.sleep_event = self.event()
 
@@ -35,6 +48,18 @@ class NetworkEnvironment(simpy.Environment):
     def stop(self):
         self.stop_event.succeed()
 
+    def get_monitor_tables(self):
+        result = defaultdict(list)
+        for node in self.nodes.values():
+            if node.monitor:
+                # list of dicts
+                node_monitor_table = node.get_monitor_table()
+                if node_monitor_table.__len__() > 0:
+                    # combine tables with equal columns
+                    index = "".join(key for key in node_monitor_table[0].keys())
+                    result[index] += node_monitor_table
+        return result
+
     def get_monitor_results(self):
         result = {}
         for node in self.nodes.values():
@@ -42,26 +67,30 @@ class NetworkEnvironment(simpy.Environment):
                 result[node.address] = node.get_monitor_results()
         return result
 
+    def get_frame_id(self):
+        self.next_frame_id += 1
+        return self.next_frame_id - 1
+
     # returns a process to yield and an inspector
-    def send_package(self, package, source_address, interface_out, extra_bytes=0, inspector=False):
-        # receiver = [address, interface_in, bandwidth, physical_delay]
-        receiver = self.table[source_address][interface_out]
-        # package.__len__() in Bytes | receiver[2] = bandwidth in b/µs | receiver[3] physical delay in µs
-        sending_time = (((package.__len__() + extra_bytes) * 8) / receiver[2]) + receiver[3]
-        # inspector contains finish_time, the sim_time when the package is send. this is important for preemption
+    def send_frame(self, frame, source_address, port_out, extra_bytes=0, inspector=False):
+        # receiver = [address, port_in, bandwidth, physical_delay]
+        receiver = self.table[source_address][port_out]
+        # frame.__len__() in Bytes | receiver[2] = bandwidth in b/µs | receiver[3] physical delay in µs
+        sending_time = (((frame.__len__() + extra_bytes) * 8) / receiver[2]) + receiver[3]
+        # inspector contains finish_time, the sim_time when the frame is send. this is important for preemption
         if inspector:
             inspector = SendingProcessInspector(self, receiver[2], self.min_preemption_bytes,
                                                 self.preemption_penalty_bytes)
-            return self.process(self.send_package_process(package, self.nodes[receiver[0]], receiver[1], sending_time,
-                                                          self.nodes[source_address], inspector)), inspector
+            return self.process(self.send_frame_process(frame, self.nodes[receiver[0]], receiver[1], sending_time,
+                                                        self.nodes[source_address], inspector)), inspector
         else:
-            return self.process(self.send_package_process(package, self.nodes[receiver[0]], receiver[1], sending_time,
-                                                          self.nodes[source_address]))
+            return self.process(self.send_frame_process(frame, self.nodes[receiver[0]], receiver[1], sending_time,
+                                                        self.nodes[source_address]))
 
     # do not interrupt this process without an inspector and checking finish_time
     # (this can cause a bug when you interrupt this process at the same time as it would be processed)
     # for this reason a runtime error (inspector is none) will occur to prevent interrupting without an inspector
-    def send_package_process(self, package, receiver, interface_in, sending_time, sender, inspector=None):
+    def send_frame_process(self, frame, receiver, port_in, sending_time, sender, inspector=None):
         start_time = self.now
         if inspector is not None:
             inspector.finish_time = self.now + sending_time
@@ -71,10 +100,10 @@ class NetworkEnvironment(simpy.Environment):
                 if sending:
                     yield self.timeout(sending_time)
                     sending_time = 0
-                    receiver.push(package, interface_in)
-                    package.on_hop(sender, receiver)
-                    if receiver.address == package.destination:
-                        package.on_destination_reached(receiver)
+                    receiver.push(frame, port_in)
+                    frame.on_hop(sender, receiver)
+                    if receiver.address == frame.destination:
+                        frame.on_destination_reached(receiver)
                 else:
                     yield self.sleep_event
             except simpy.Interrupt:
@@ -83,23 +112,23 @@ class NetworkEnvironment(simpy.Environment):
                     inspector.finish_time = -1
                 else:
                     start_time = self.now
-                    # some bytes need to be transmitted to signal that the package is continued
+                    # some bytes need to be transmitted to signal that the frame is continued
                     sending_time += inspector.get_penalty_time()
                     inspector.finish_time = self.now + sending_time
                 sending = not sending
 
 
 class NetworkBuilder(object):
-    def __init__(self, channel_types=None):
+    def __init__(self, channel_types):
         # channel_types = { type: physical_travel_factor }
         # physical_travel_factor in m/µs
         self.channel_types = channel_types
         # { address: Node }
         self.nodes = {}
-        # {source: {interface_out: [destination, interface_in, bandwidth, physical_delay] }}
+        # {source: {port_out: [destination, port_in, bandwidth, physical_delay] }}
         self.table = defaultdict(dict)
-        # {stream_address: {switch_address: {port: 0/1}}}
-        self.streams = {}
+        # {source: {destination: [destination, port_in, bandwidth, physical_delay] }}
+        self.table2 = defaultdict(list)
 
     # time one bit takes to travel the physical layer
     def physical_delay(self, channel_type, channel_length):
@@ -113,32 +142,34 @@ class NetworkBuilder(object):
         return self
 
     # bandwidth in Mb/s, channel_length in m
-    def connect_nodes(self, node_a, node_b, bandwidth=10, channel_type=None, channel_length=0):
+    def connect_nodes(self, node_a, node_b, bandwidth=10, channel_type=None, channel_length=0, *switch_params):
         node_a_dict = self.table[node_a.address]
         node_b_dict = self.table[node_b.address]
-        interface_a = node_a_dict.__len__() + 1
-        interface_b = node_b_dict.__len__() + 1
+        port_a = node_a_dict.__len__() + 1
+        port_b = node_b_dict.__len__() + 1
         # Mb/s = 10^6b/s = 10^6b/10^6µs = x
         # b/µs = x
         # bandwidth doesn't need to be changed
         physical_delay = self.physical_delay(channel_type, channel_length)
-        node_a_dict[interface_a] = [node_b.address, interface_b, bandwidth, physical_delay]
-        node_b_dict[interface_b] = [node_a.address, interface_a, bandwidth, physical_delay]
-        node_a.add_interface(interface_a)
-        node_b.add_interface(interface_b)
-        return self
+        node_a_dict[port_a] = [node_b.address, port_b, bandwidth, physical_delay]
+        node_b_dict[port_b] = [node_a.address, port_a, bandwidth, physical_delay]
 
-    def create_stream(self, address, *switch_connections):
-        self.streams[address] = defaultdict(dict)
-        stream = self.streams[address]
-        for switch_connection in switch_connections:
-            switch = switch_connection[0]
-            for port in self.table[switch.address]:
-                if self.nodes[self.table[switch.address][port][0]] in switch_connection[1]:
-                    stream[switch.address][port] = 1
-                else:
-                    stream[switch.address][port] = 0
-        return stream
+        if isinstance(node_a, Switch) and switch_params.__len__() > 0:
+            node_a.add_port(port_a, bandwidth, switch_params[0])
+            if isinstance(node_b, Switch) and switch_params.__len__() > 1:
+                node_b.add_port(port_b, bandwidth, switch_params[1])
+            else:
+                node_b.add_port(port_b, bandwidth)
+        else:
+            node_a.add_port(port_a, bandwidth)
+            if isinstance(node_b, Switch) and switch_params.__len__() > 0:
+                node_b.add_port(port_b, bandwidth, switch_params[0])
+            else:
+                node_b.add_port(port_b, bandwidth)
+
+        self.table2[(node_a.address, node_b.address)] = [bandwidth, physical_delay]
+        self.table2[(node_b.address, node_a.address)] = [bandwidth, physical_delay]
+        return self
 
 
 class SendingProcessInspector(object):

@@ -3,74 +3,32 @@ import json
 
 from simulation.core import *
 from simulation.node import *
-from simulation.switch import Switch
-from simulation.switch_buffer import *
+from simulation.switch import Switch, PriorityMap, TransmissionSelectionAlgorithmMap, TrafficClassBandwidthMap, \
+    SwitchPortParam
 from simulation.generators import *
 from simulation.simulation_wrapper import *
 
 
-def foo():
-    tmp = time()
-    some_channel_types = {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792,
-                          "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
-    env = NetworkEnvironment(channel_types=some_channel_types, verbose=True, preemption_penalty_bytes=0,
-                             min_preemption_bytes=250)
-    builder = env.builder
-    nodes = [Flow(env, "Flow-1", "Sink"),
-             Switch(env, "Switch", buffer_type=Priority_FCFS_Scheduler, preemption=False, monitor=True),
-             SinglePacket(env, "Sink", "Flow-1", 0, 0)]
-    builder.append_nodes(*nodes).connect_nodes(nodes[0], nodes[1]).connect_nodes(nodes[1], nodes[2])
-    runtime = 10000
-    env.run(until=runtime)
-    print(time() - tmp)
-    for interface, module in nodes[1].interface_modules.items():
-        parse_switch_buffer(module[0].data, runtime, interface, env.table[nodes[1].address][interface][2])
-
-
-def some_package_generator(env, source, destination, payload=750, priority=1):
+def some_frame_generator(env, source, destination, payload=750, priority=1):
     while True:
-        payload = np.random.uniform(250, 1300)
-        yield MonitoredPackage(env, source, destination, payload, priority)
+        payload = env.random.uniform(250, 1300)
+        yield MonitoredFrame(env, source, destination, payload, priority)
 
 
-def foo2():
+def foo4():
     while True:
-        some_channel_types = {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792,
-                              "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
-        env = NetworkEnvironment(channel_types=some_channel_types, verbose=False, preemption_penalty_bytes=0,
-                                 min_preemption_bytes=250)
+        env = NetworkEnvironment(name="Test", seed=1337, verbose=False)
         builder = env.builder
-        pi = PackageInjector(env, "Injector", "Switch", 10,
-                             exp_generator(1), some_package_generator(env, "Injector", "Sink"), True)
-        nodes = [pi,
-                 Switch(env, "Switch", buffer_type=Priority_FCFS_Scheduler, preemption=False, monitor=True),
-                 Switch(env, "Switch-2", buffer_type=Priority_FCFS_Scheduler, preemption=False, monitor=True),
-                 SinglePacket(env, "Sink", "broadcast", 0, 0)]
-        builder.append_nodes(*nodes).connect_nodes(nodes[1], nodes[2]).connect_nodes(nodes[2], nodes[3])
-        yield env
-
-
-def foo3(intensity, switch_buffer=Priority_FCFS_Scheduler, bandwidth=10, preemption=False, min_preemption_bytes=250, preemption_penalty_bytes=0):
-    while True:
-        some_channel_types = {"Fiber": 0.97 * 299.792, "Coaxial": 0.8 * 299.792,
-                              "Copper": 0.6 * 299.792, "Radio": 0.2 * 299.792}
-        env = NetworkEnvironment(name="intensity: %0.2f" % intensity,
-                                 channel_types=some_channel_types, verbose=False,
-                                 preemption_penalty_bytes=preemption_penalty_bytes,
-                                 min_preemption_bytes=min_preemption_bytes)
-        builder = env.builder
-        monitored_node = Flow2(env, "Source", some_package_generator(env, "Source", "wololo", priority=0), monitor=True)
-        # jitter_injector = PackageInjector(env, "Jitter", "Switch", bandwidth, exp_generator(intensity),
-        #                                  some_package_generator(env, "Injector", "Sink", priority=1), False)
-        sender1 = Flow2(env, "Sender1", some_package_generator(env, "Sender1", "wololo", priority=1), monitor=False)
-        sender2 = Flow2(env, "Sender2", some_package_generator(env, "Sender2", "wololo", priority=1), monitor=False)
-        switch = Switch(env, "Switch", buffer_type=switch_buffer, preemption=preemption, monitor=True)
+        monitored_node = Flow2(env, "Source", some_frame_generator(env, "Source", "Sink", priority=0), monitor=True)
         sink = SinglePacket(env, "Sink", "broadcast", 0, 0)
-        builder.append_nodes(monitored_node, sender1, sender2, switch, sink)
-        builder.connect_nodes(monitored_node, switch, bandwidth=bandwidth*intensity)
-        builder.connect_nodes(sender1, switch, bandwidth=bandwidth*intensity).connect_nodes(sender2, switch, bandwidth=bandwidth*intensity)
-        builder.connect_nodes(switch, sink, bandwidth=bandwidth * 3)
-        builder.create_stream("wololo", (switch, [sink]))
+        switch_param = SwitchPortParam(1)
+        switch_param.tsa_map.\
+            map_traffic_class_transmission_selection_algorithm(0, TransmissionSelectionAlgorithmMap.credit_based_shaper)
+        switch_param.tsa_bandwidth.map_traffic_class_bandwidth(0, 0.5)
+        switch = Switch(env, "Switch", monitor=True, preemption=False)
+        builder.append_nodes(monitored_node, switch, sink)
+        builder.connect_nodes(monitored_node, switch, 10, None, 0, switch_param)
+        builder.connect_nodes(switch, sink, 10, None, 0, switch_param)
         yield env
 
 
@@ -88,3 +46,6 @@ def nice_output(sim_env):
 # result = simulate_multiple([foo3(i / 10, preemption=True, min_preemption_bytes=1) for i in range(1, 11)], 15, 1000000, 0.95)
 # print(json.dumps(result, indent=2))
 
+
+# simulate_same_multiple_csv(foo2(), 10, 100000, "foooo")
+simulate_same_multiple_csv(foo4(), 3, 100000, file_name="test")

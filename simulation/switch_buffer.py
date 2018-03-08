@@ -1,132 +1,183 @@
-from collections import deque, defaultdict
+from collections import defaultdict, deque
 from math import sqrt
 
 
 class SwitchBuffer(object):
-    def next_package(self):
-        raise NotImplementedError("You have to implement this")
-
-    def append_package(self, package):
-        raise NotImplementedError("You have to implement this")
-
-    def remove(self, package):
-        raise NotImplementedError("You have to implement this")
-
-    def empty(self):
-        raise NotImplementedError("You have to implement this")
-
-    def __len__(self):
-        raise NotImplementedError("You have to implement this")
-
-
-class MonitoredSwitchBuffer(SwitchBuffer):
-    def __init__(self, env, switch_buffer, data=None):
+    def __init__(self, env, port_transmit_rate, traffic_class_map, tsa_map, config, monitor=False):
         self.env = env
-        self.to_monitor = switch_buffer
-        self.data = data if data is not None else defaultdict(list)
-        self.max_q_len = 0
+        self.monitor = monitor
+        self.data = defaultdict(list)
+        self.t_class_p_map = traffic_class_map
+        self.config = config
+        # tsa = transmission selection algorithm
+        self.tsa = []
+        for tsa, delta_bandwidth in zip(tsa_map.transmission_selection_algorithm_per_traffic_class,
+                                        config.bandwidth_param):
+            self.tsa.append(tsa(port_transmit_rate, delta_bandwidth))
 
-    def next_package(self):
-        return self.to_monitor.next_package()
-
-    def append_package(self, package):
-        self.to_monitor.append_package(package)
-        self.data["append"].append((self.env.now, self.__len__(), package))
-        if self.to_monitor.__len__() > self.max_q_len:
-            self.max_q_len = self.to_monitor.__len__()
-
-    def remove(self, package):
-        self.data["pop"].append((self.env.now, self.__len__(), package))
-        self.to_monitor.remove(package)
-
-    def empty(self):
-        return self.to_monitor.empty()
-
-    def __len__(self):
-        return self.to_monitor.__len__()
-
-
-class FCFS_Buffer(SwitchBuffer):
-    def __init__(self):
-        self.queue = deque([])
-
-    def next_package(self):
-        return self.queue[0]
-
-    def append_package(self, package):
-        self.queue.append(package)
-
-    def remove(self, package):
-        self.queue.remove(package)
-
-    def empty(self):
-        return self.queue.__len__() == 0
-
-    def __len__(self):
-        return self.queue.__len__()
-
-
-class LCFS_Buffer(SwitchBuffer):
-    def __init__(self):
-        self.queue = []
-
-    def next_package(self):
-        return self.queue[self.queue.__len__() - 1]
-
-    def append_package(self, package):
-        self.queue.append(package)
-
-    def remove(self, package):
-        self.queue.remove(package)
-
-    def empty(self):
-        return self.queue.__len__() == 0
-
-    def __len__(self):
-        return self.queue.__len__()
-
-
-class Priority_FCFS_Scheduler(SwitchBuffer):
-    def __init__(self):
-        self.queues = defaultdict(deque)
-        self.max_priority = 0
-
-    def next_package(self):
-        for i in range(0, self.max_priority + 1):
-            try:
-                return self.queues[i][0]
-            except IndexError:
-                pass
+    # returns the next frame for transmission
+    # selects the frame from the highest traffic class which has a frame available
+    # see 802.1Q page: 127, block: 8.6.8
+    def peek_next_frame(self):
+        for tsa in reversed(self.tsa):
+            frame = tsa.get_frame(self.env.now)
+            if frame is not None:
+                return frame
         return None
 
-    def append_package(self, package):
-        self.queues[package.priority].append(package)
-        if package.priority > self.max_priority:
-            self.max_priority = package.priority
+    def append_frame(self, frame):
+        if self.monitor:
+            self.data["append"].append((self.env.now, self.__len__(), frame))
+        self.tsa[self.t_class_p_map.get_traffic_class(frame.priority)].append_frame(self.env.now, frame)
 
-    def remove(self, package):
-        self.queues[package.priority].remove(package)
+    # drops a frame without transmitting it
+    def drop_frame(self, frame):
+        if self.monitor:
+            self.data["drop"].append((self.env.now, self.__len__(), frame))
+        self.tsa[self.t_class_p_map.get_traffic_class(frame.priority)].remove_frame(self.env.now, frame)
+
+    # called when transmission of a frame is started
+    def transmission_start(self, frame):
+        self.tsa[self.t_class_p_map.get_traffic_class(frame.priority)].transmitting(self.env.now, True)
+
+    # called when transmission of a frame is paused, e.g. frame preemption
+    def transmission_pause(self, frame):
+        self.tsa[self.t_class_p_map.get_traffic_class(frame.priority)].transmitting(self.env.now, False)
+
+    # called when transmission of a frame is done, the frame is removed from the queue
+    def transmission_done(self, frame):
+        if self.monitor:
+            self.data["pop"].append((self.env.now, self.__len__(), frame))
+        traffic_class = self.t_class_p_map.get_traffic_class(frame.priority)
+        self.tsa[traffic_class].remove_frame(self.env.now, frame)
+        self.tsa[traffic_class].transmitting(self.env.now, False)
 
     def empty(self):
-        for queue in self.queues.values():
-            if queue.__len__() > 0:
-                return False
-        return True
+        return self.__len__() == 0
 
     def __len__(self):
-        tmp = 0
-        for queue in self.queues.values():
-            tmp += queue.__len__()
-        return tmp
+        length = 0
+        for tsa in self.tsa:
+            length += tsa.queue.__len__()
+        return length
 
 
-# (time, queue_length, package)
+class FrameQueue(object):
+    def append(self, frame):
+        pass
+
+    def remove(self, frame):
+        pass
+
+    def get_head_frame(self):
+        pass
+
+    def __len__(self):
+        pass
+
+
+class FrameFIFO(FrameQueue):
+    def __init__(self):
+        self.queue = deque()
+
+    def append(self, frame):
+        self.queue.append(frame)
+
+    def remove(self, frame):
+        self.queue.remove(frame)
+
+    def get_head_frame(self):
+        return self.queue[0]
+
+    def __len__(self):
+        return self.queue.__len__()
+
+
+class TransmissionSelectionAlgorithm(object):
+    def __init__(self, port_transmit_rate, delta_bandwidth, queue=None):
+        self.port_transmit_rate = port_transmit_rate
+        self.delta_bandwidth = delta_bandwidth
+        self.queue = queue if queue is not None else FrameFIFO()
+
+    # returns a frame if a frame is available for transmission, None otherwise
+    def get_frame(self, time):
+        return None
+
+    # appends a frame to the queue
+    def append_frame(self, time, frame):
+        self.queue.append(frame)
+
+    # removes a frame from the queue, e.g. frame has been transmitted or dropped
+    def remove_frame(self, time, frame):
+        self.queue.remove(frame)
+
+    def transmitting(self, time, status):
+        pass
+
+
+class StrictPriorityAlgorithm(TransmissionSelectionAlgorithm):
+    def __init__(self, *args, **kwargs):
+        super(StrictPriorityAlgorithm, self).__init__(*args, **kwargs)
+
+    def get_frame(self, time):
+        if self.queue.__len__() > 0:
+            return self.queue.get_head_frame()
+        else:
+            return None
+
+
+# see 802.1Q, page: 128, block: 8.6.8.2
+class CreditBasedShaper(TransmissionSelectionAlgorithm):
+    def __init__(self, *args, **kwargs):
+        super(CreditBasedShaper, self).__init__(*args, **kwargs)
+
+        # in bit / µs
+        self.idle_slope = self.delta_bandwidth * self.port_transmit_rate
+
+        self.transmit = False
+        self.transmit_allowed = True
+        self.credit = 0
+        self.send_slope = self.idle_slope - self.port_transmit_rate
+
+        self.transmit_time = 0
+
+    def append_frame(self, time, frame):
+        self.update_credit(time)
+        self.queue.append(frame)
+
+    def get_frame(self, time):
+        self.update_credit(time)
+        if self.queue.__len__() > 0 and self.transmit_allowed:
+            return self.queue.get_head_frame()
+        return None
+
+    def transmitting(self, time, status):
+        self.update_credit(time)
+        self.transmit = status
+
+    def update_credit(self, time):
+        passed_time = time - self.transmit_time
+        if self.transmit:
+            self.credit += passed_time * self.send_slope
+        else:
+            self.credit += passed_time * self.idle_slope
+
+        if self.queue.__len__() == 0 and self.credit > 0 and not self.transmit:
+            self.credit = 0
+
+        if self.credit >= 0:
+            self.transmit_allowed = True
+        else:
+            self.transmit_allowed = False
+        self.transmit_time = time
+
+
 def average_waiting_time(append, pop):
     stats = defaultdict(list)
     stats[-1] = [0, 0]
-    for a_package, p_package in zip(sorted(append, key=lambda p: p[2].id), sorted(pop, key=lambda p: p[2].id)):
-        waiting_time = p_package[0] - a_package[0]
-        tmp = stats[a_package[2].priority]
+    for a_frame, p_frame in zip(sorted(append, key=lambda p: p[2].id), sorted(pop, key=lambda p: p[2].id)):
+        waiting_time = p_frame[0] - a_frame[0]
+        tmp = stats[a_frame[2].priority]
         if tmp.__len__() == 0:
             tmp.append(0)
             tmp.append(0)
@@ -141,13 +192,13 @@ def average_waiting_time(append, pop):
 def standard_deviation_waiting_time(append, pop, _average_waiting_time):
     stats = defaultdict(list)
     stats[-1] = [0, 0]
-    for a_package, p_package in zip(sorted(append, key=lambda p: p[2].id), sorted(pop, key=lambda p: p[2].id)):
-        waiting_time = p_package[0] - a_package[0]
-        tmp = stats[a_package[2].priority]
+    for a_frame, p_frame in zip(sorted(append, key=lambda p: p[2].id), sorted(pop, key=lambda p: p[2].id)):
+        waiting_time = p_frame[0] - a_frame[0]
+        tmp = stats[a_frame[2].priority]
         if tmp.__len__() == 0:
             tmp.append(0)
             tmp.append(0)
-        tmp[0] += pow(waiting_time - _average_waiting_time[a_package[2].priority], 2)
+        tmp[0] += pow(waiting_time - _average_waiting_time[a_frame[2].priority], 2)
         tmp[1] += 1
         tmp = stats[-1]
         tmp[0] += pow(waiting_time - _average_waiting_time[-1], 2)
@@ -158,67 +209,35 @@ def standard_deviation_waiting_time(append, pop, _average_waiting_time):
 def average_queue_length(data, runtime):
     queue_len = 0
     last_time = 0
-    for package in sorted(data, key=lambda p: p[0]):
-        q_time = (package[0] - last_time) / runtime
-        last_time = package[0]
-        queue_len += q_time * package[1]
+    for frame in sorted(data, key=lambda p: p[0]):
+        q_time = (frame[0] - last_time) / runtime
+        last_time = frame[0]
+        queue_len += q_time * frame[1]
     return queue_len
 
 
 def standard_deviation_queue_length(data, _average_queue_length, runtime):
     queue_len = 0
     last_time = 0
-    for package in sorted(data, key=lambda p: p[0]):
-        q_time = package[0] - last_time
-        last_time = package[0]
-        queue_len += q_time * pow(package[1] - _average_queue_length, 2) / runtime
+    for frame in sorted(data, key=lambda p: p[0]):
+        q_time = frame[0] - last_time
+        last_time = frame[0]
+        queue_len += q_time * pow(frame[1] - _average_queue_length, 2) / runtime
     return sqrt(queue_len)
 
 
-# average size of packages ->received<-
+# average size of frames ->received<-
 def average_packet_size(append):
-    package_length = 0
-    package_count = append.__len__()
-    for package in append:
-        package_length += package[2].__len__() / package_count
-    return package_length
+    frame_length = 0
+    frame_count = append.__len__()
+    for frame in append:
+        frame_length += frame[2].__len__() / frame_count
+    return frame_length
 
 
 def standard_deviation_packet_size(append, _average_packet_size):
-    package_length = 0
-    package_count = append.__len__() - 1 if append.__len__() > 1 else 1
-    for package in append:
-        package_length += pow(package[2].__len__() - _average_packet_size, 2) / package_count
-    return sqrt(package_length)
-
-
-def parse_switch_buffer(buffer, runtime, interface, bandwidth):
-    data = buffer.data
-    append = data["append"]
-    pop = data["pop"]
-    print()
-    print("SwitchBuffer interface %s" % str(interface))
-    print("Bandwidth:                               %d b/µs = Mb/s" % bandwidth)
-    print("packages received                        %d" % append.__len__())
-    print("packages send                            %d" % pop.__len__())
-
-    # average_waiting_time = Zeit seid Betreten des Swichtes bis zum Verlassen (inklusive Übertragungsdauer)
-    _average_waiting_time = average_waiting_time(append, pop)
-    _standard_deviation_waiting_time = standard_deviation_waiting_time(append, pop, _average_waiting_time)
-
-    _average_packet_size = average_packet_size(append)
-    _standard_deviation_packet_size = standard_deviation_packet_size(append, _average_packet_size)
-
-    append_pop = append + pop
-
-    _average_queue_length = average_queue_length(append_pop, runtime)
-    _standard_deviation_queue_length = standard_deviation_queue_length(append_pop, _average_queue_length, runtime)
-
-    print("average package size:                    %s Byte" % str(_average_packet_size))
-    print("standard deviation package size:         %s Byte" % str(_standard_deviation_packet_size))
-    print("package size / bandwidth:                %s µs" % str(_average_packet_size * 8 / bandwidth))
-    print("average waiting time in µs:              %s" % str(_average_waiting_time))
-    print("standard deviation waiting time:         %s" % str(_standard_deviation_waiting_time))
-    print("average queue length:                    %s" % str(_average_queue_length))
-    print("standard deviation queue length:         %s" % str(_standard_deviation_queue_length))
-    print("Max queue length:                        %s" % buffer.max_q_len)
+    frame_length = 0
+    frame_count = append.__len__() - 1 if append.__len__() > 1 else 1
+    for frame in append:
+        frame_length += pow(frame[2].__len__() - _average_packet_size, 2) / frame_count
+    return sqrt(frame_length)
