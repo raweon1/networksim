@@ -2,6 +2,7 @@ from time import time
 import json
 
 from simulation.core import *
+from simulation.frame import *
 from simulation.node import *
 from simulation.switch import Switch, PriorityMap, TransmissionSelectionAlgorithmMap, TrafficClassBandwidthMap, \
     SwitchPortParam

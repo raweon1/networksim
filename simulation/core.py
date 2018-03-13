@@ -2,7 +2,29 @@ import simpy
 from collections import defaultdict
 import numpy as np
 
-from simulation.switch import Switch
+from simulation.switch import Switch, SwitchPortParam
+from simulation.frame import Frame
+from simulation.node import Node
+
+
+class SendingProcessInspector(object):
+    def __init__(self, env, bandwidth, min_preemption_bytes=80, penalty_bytes=8):
+        self.env = env
+        self.bandwidth = bandwidth
+        self.min_preemption_bytes = min_preemption_bytes
+        self.penalty_time = penalty_bytes * 8 / bandwidth
+        self.penalty_bytes = penalty_bytes
+        self.finish_time = 0
+
+    def process_interruptable(self):
+        bytes_left = (self.finish_time - self.env.now) * self.bandwidth / 8
+        if self.finish_time < 0 or bytes_left - self.penalty_bytes > self.min_preemption_bytes:
+            return True
+        else:
+            return False
+
+    def get_penalty_time(self):
+        return self.penalty_time
 
 
 class NetworkEnvironment(simpy.Environment):
@@ -12,8 +34,18 @@ class NetworkEnvironment(simpy.Environment):
 
     id = {}
 
-    def __init__(self, name="no_name", seed=None, channel_types=None, verbose=True, min_preemption_bytes=80,
-                 preemption_penalty_bytes=8, *args, **kwargs):
+    def __init__(self, name="no_name", seed: int = None, channel_types: dict = None, verbose: bool = True,
+                 min_preemption_bytes: int = 80, preemption_penalty_bytes: int = 8, *args, **kwargs):
+        """
+        :param name: Name of this Simulation
+        :param seed: Seed of this Simulations random generator
+        :param channel_types: available types of connections between nodes for this simulation. Form must be:
+        channel_types = { type: physical_travel_factor (in m/µs), ...}
+        :param verbose: bool for printing events
+        :param min_preemption_bytes: int, minimum amount of bytes left to send before interrupting sending_event
+        for frame preemption
+        :param preemption_penalty_bytes: int, amount of extra bytes to send for interrupting a sending_event
+        """
         super(NetworkEnvironment, self).__init__(*args, **kwargs)
         self.name = name
         try:
@@ -49,6 +81,10 @@ class NetworkEnvironment(simpy.Environment):
         self.stop_event.succeed()
 
     def get_monitor_tables(self):
+        """
+
+        :return: dict of lists of monitored information
+        """
         result = defaultdict(list)
         for node in self.nodes.values():
             if node.monitor:
@@ -72,8 +108,17 @@ class NetworkEnvironment(simpy.Environment):
         return self.next_frame_id - 1
 
     # returns a process to yield and an inspector
-    def send_frame(self, frame, source_address, port_out, extra_bytes=0, inspector=False):
+    def send_frame(self, frame: Frame, source_address, port_out: int, extra_bytes: int = 0, inspector: bool = False):
         # receiver = [address, port_in, bandwidth, physical_delay]
+        """
+
+        :param frame: frame to send
+        :param source_address: address of the sending node
+        :param port_out: egress port of the sending node
+        :param extra_bytes: additional bytes to transmit
+        :param inspector: bool if you want an inspector
+        :return: returns a sending_event process to yield and an inspector
+        """
         receiver = self.table[source_address][port_out]
         # frame.__len__() in Bytes | receiver[2] = bandwidth in b/µs | receiver[3] physical delay in µs
         sending_time = (((frame.__len__() + extra_bytes) * 8) / receiver[2]) + receiver[3]
@@ -90,7 +135,16 @@ class NetworkEnvironment(simpy.Environment):
     # do not interrupt this process without an inspector and checking finish_time
     # (this can cause a bug when you interrupt this process at the same time as it would be processed)
     # for this reason a runtime error (inspector is none) will occur to prevent interrupting without an inspector
-    def send_frame_process(self, frame, receiver, port_in, sending_time, sender, inspector=None):
+    def send_frame_process(self, frame: Frame, receiver: Node, port_in: int, sending_time: float, sender: Node,
+                           inspector: SendingProcessInspector = None):
+        """
+        :param frame: frame that is being send
+        :param receiver: receiving node
+        :param port_in: receiving node ingress port
+        :param sending_time: time it takes to send this frame
+        :param sender: sending node
+        :param inspector: inspector
+        """
         start_time = self.now
         if inspector is not None:
             inspector.finish_time = self.now + sending_time
@@ -132,17 +186,37 @@ class NetworkBuilder(object):
 
     # time one bit takes to travel the physical layer
     def physical_delay(self, channel_type, channel_length):
+        """
+        :param channel_type: channel_type defined for this simulation in the NetworkEnvironment
+        :param channel_length: Meter
+        :return: time one bit takes to travel the physical layer
+        """
         if channel_type is not None and self.channel_types is not None:
             return channel_length / self.channel_types[channel_type]
         return 0
 
     def append_nodes(self, *nodes):
+        """
+        :param nodes: Node[s] to append
+        :return: returns NetworkBuilder
+        """
         for node in nodes:
             self.nodes[node.address] = node
         return self
 
     # bandwidth in Mb/s, channel_length in m
-    def connect_nodes(self, node_a, node_b, bandwidth=10, channel_type=None, channel_length=0, *switch_params):
+    def connect_nodes(self, node_a: Node, node_b: Node, bandwidth: int = 10, channel_type=None, channel_length: int = 0,
+                      *switch_params: SwitchPortParam):
+        """
+
+        :param node_a: first Node to connect
+        :param node_b: second Node to connect
+        :param bandwidth: bandwidth of this connection
+        :param channel_type: channel_type defined for this simulation in the NetworkEnvironment
+        :param channel_length: in meter
+        :param switch_params: up to two SwitchPortParam. The first SwitchPortParam is used for the first Switch
+        :return: returns NetworkBuilder
+        """
         node_a_dict = self.table[node_a.address]
         node_b_dict = self.table[node_b.address]
         port_a = node_a_dict.__len__() + 1
@@ -170,23 +244,3 @@ class NetworkBuilder(object):
         self.table2[(node_a.address, node_b.address)] = [bandwidth, physical_delay]
         self.table2[(node_b.address, node_a.address)] = [bandwidth, physical_delay]
         return self
-
-
-class SendingProcessInspector(object):
-    def __init__(self, env, bandwidth, min_preemption_bytes=80, penalty_bytes=8):
-        self.env = env
-        self.bandwidth = bandwidth
-        self.min_preemption_bytes = min_preemption_bytes
-        self.penalty_time = penalty_bytes * 8 / bandwidth
-        self.penalty_bytes = penalty_bytes
-        self.finish_time = 0
-
-    def process_interruptable(self):
-        bytes_left = (self.finish_time - self.env.now) * self.bandwidth / 8
-        if self.finish_time < 0 or bytes_left - self.penalty_bytes > self.min_preemption_bytes:
-            return True
-        else:
-            return False
-
-    def get_penalty_time(self):
-        return self.penalty_time

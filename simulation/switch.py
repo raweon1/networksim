@@ -1,7 +1,9 @@
-from simulation.core import *
+from simpy import Interrupt
+
 from simulation.node import Node
-from simulation.switch_buffer import *
-from simulation.switch_buffer import StrictPriorityAlgorithm, CreditBasedShaper
+from simulation.switch_buffer import SwitchBuffer, StrictPriorityAlgorithm, CreditBasedShaper, \
+    TransmissionSelectionAlgorithm, standard_deviation_waiting_time, average_waiting_time, average_packet_size, \
+    standard_deviation_packet_size, average_queue_length, standard_deviation_queue_length
 
 
 class PriorityMap(object):
@@ -16,11 +18,20 @@ class PriorityMap(object):
            [1, 0, 2, 3, 4, 4, 5, 6],
            [1, 0, 2, 3, 4, 5, 6, 7]]
 
-    def __init__(self, available_traffic_classes=8):
+    def __init__(self, available_traffic_classes: int = 8):
+        """
+        Maps Frame priorities to traffic classes
+        :param available_traffic_classes: how many traffic classes are supported. 1-8
+        """
         self.available_traffic_classes = available_traffic_classes - 1
 
     # args = list of tuples of (priority, traffic_class)
-    def map_priority_traffic_class(self, priority, traffic_class):
+    def map_priority_traffic_class(self, priority: int, traffic_class: int):
+        """
+        Maps a specific priority to a specific traffic class
+        :param priority:
+        :param traffic_class:
+        """
         self.map[self.available_traffic_classes][priority] = traffic_class
 
     def get_traffic_class(self, priority):
@@ -31,30 +42,52 @@ class TransmissionSelectionAlgorithmMap(object):
     strict_priority = StrictPriorityAlgorithm
     credit_based_shaper = CreditBasedShaper
 
-    def __init__(self, available_traffic_classes=8):
+    def __init__(self, available_traffic_classes:int = 8):
+        """
+        Maps TransmissionSelectionAlgorithm to traffic classes
+        :param available_traffic_classes: how many traffic classes are supported. 1-8
+        """
         self.transmission_selection_algorithm_per_traffic_class = []
         for i in range(0, available_traffic_classes):
             self.transmission_selection_algorithm_per_traffic_class.append(
                 TransmissionSelectionAlgorithmMap.strict_priority)
 
     # arg = list of tuples of (traffic_class, transmission_selection_algorithm)
-    def map_traffic_class_transmission_selection_algorithm(self, traffic_class, tsa):
+    def map_traffic_class_transmission_selection_algorithm(self, traffic_class: int, tsa: TransmissionSelectionAlgorithm):
+        """
+        Maps a specific TransmissionSelectionAlgorithm to a specific traffic class
+        :param traffic_class:
+        :param tsa: TransmissionSelectionAlgorithm
+        """
         self.transmission_selection_algorithm_per_traffic_class[traffic_class] = tsa
 
 
 class TrafficClassBandwidthMap(object):
     def __init__(self, available_traffic_classes=8):
+        """
+        Maps bandwidth usage in % to traffic classes for some TransmissionSelectionAlgorithm
+        :param available_traffic_classes: how many traffic classes are supported. 1-8
+        """
         self.bandwidth_param = []
         for i in range(0, available_traffic_classes):
             self.bandwidth_param.append(0)
 
     # arg = list of tuples of (traffic_class, bandwidth usage in %)
-    def map_traffic_class_bandwidth(self, traffic_class, delta_bandwidth):
+    def map_traffic_class_bandwidth(self, traffic_class: int, delta_bandwidth: float):
+        """
+        Maps bandwidth usage in % to a specific traffic class
+        :param traffic_class:
+        :param delta_bandwidth: float from 0-1
+        """
         self.bandwidth_param[traffic_class] = delta_bandwidth
 
 
 class SwitchPortParam(object):
-    def __init__(self, available_traffic_classes=8):
+    def __init__(self, available_traffic_classes:int = 8):
+        """
+        Collection of all 3 Switch specific config-classes
+        :param available_traffic_classes: how many traffic classes are supported. 1-8
+        """
         self.priority_map = PriorityMap(available_traffic_classes)
         self.tsa_map = TransmissionSelectionAlgorithmMap(available_traffic_classes)
         self.tsa_bandwidth = TrafficClassBandwidthMap(available_traffic_classes)
@@ -62,7 +95,14 @@ class SwitchPortParam(object):
 
 class Switch(Node):
     # aging_time in seconds
-    def __init__(self, env, address, aging_time=-1, preemption=False, monitor=False):
+    def __init__(self, env, address, aging_time: int = -1, preemption: bool = False, monitor: bool = False):
+        """
+        :param env:
+        :param address: see Node address
+        :param aging_time: time until self learning entry is discarded. Should be ignored
+        :param preemption: activate frame preemption for this Switch
+        :param monitor: bool
+        """
         super(Switch, self).__init__(env, address, monitor)
         # time until entries in switch_table become invalid, input in seconds -> x1.000.000 for µs
         self.aging_time = aging_time * 1000000 if aging_time > 0 else aging_time
@@ -187,7 +227,12 @@ class Switch(Node):
             result[port] = sub_result
         return result
 
-    def run(self, port, buffer):
+    def run(self, port: int, buffer: SwitchBuffer):
+        """
+        Method for the simpy process for this switch and port
+        :param port: port of this process
+        :param buffer: buffer of this process/port
+        """
         frame = None
         sending_event = None
         while True:
@@ -216,10 +261,15 @@ class Switch(Node):
                 else:
                     # no frame to transmit
                     yield self.sleep_event
-            except simpy.Interrupt:
+            except Interrupt:
                 pass
 
-    def preemption_run(self, port, buffer):
+    def preemption_run(self, port: int, buffer: SwitchBuffer):
+        """
+        Method for the simpy process for this switch and port with preemption activated
+        :param port: port of this process
+        :param buffer: buffer of this process/port
+        """
         pending_events = {}
         frame = None
         sending_event = None
@@ -262,7 +312,7 @@ class Switch(Node):
                 else:
                     # there is no frame for transmission
                     yield self.sleep_event
-            except simpy.Interrupt:
+            except Interrupt:
                 if frame is not None:
                     new_frame = buffer.peek_next_frame()
                     # inspector.process_interruptable() prevents a bug when we try to interrupt an event that would

@@ -10,7 +10,16 @@ class Frame(object):
     each package has a priority
     each package has an automatically generated id
     """
-    def __init__(self, env, source, destination, payload, priority=0, header=(26, "Ethernet_Frame_Header")):
+    def __init__(self, env, source, destination, payload: int, priority: int = 0, header = (26, "Ethernet_Frame_Header")):
+        """
+
+        :param env: NetworkEnvironment for this Frame
+        :param source: Source-Node address!
+        :param destination: Destination-Node address!
+        :param payload: Size of the Payload in Bytes
+        :param priority: Priority of this Frame. Should be 0-7
+        :param header: default size of 26 Bytes.
+        """
         self.id = env.get_frame_id()
         self.env = env
         self.source = source
@@ -21,9 +30,18 @@ class Frame(object):
         self.priority = priority
 
     def on_hop(self, sender, receiver):
+        """
+        called when this frame is received
+        :param sender: sending node of this hop
+        :param receiver: receiving node of this hop
+        """
         pass
 
     def on_destination_reached(self, node):
+        """
+        called when this frame reached its destination node
+        :param node: destination node
+        """
         pass
 
     def peek_header(self):

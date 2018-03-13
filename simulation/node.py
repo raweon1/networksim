@@ -1,23 +1,44 @@
 import numpy as np
 from math import sqrt
 
-from simulation.frame import *
+from simulation.frame import Frame
 
 
 class Node(object):
-    def __init__(self, env, address, monitor=False):
+    def __init__(self, env, address, monitor: bool = False):
+        """
+        :param env: NetworkEnvironment for this Frame
+        :param address: Address of this node, should be unique and a string/int
+        :param monitor: bool if you want to monitor this node
+        """
         self.env = env
         self.address = address
         self.monitor = monitor
         self.ports = []
 
-    def on_frame_received(self, frame, port_in):
+    def on_frame_received(self, frame: Frame, port_in: int):
+        """
+        called when a frame is received
+        :param frame: received frame
+        :param port_in: ingress port
+        """
         self.env.sim_print("%s: %s received on port %s" % (str(self.address), str(frame), str(port_in)))
 
-    def on_frame_sending(self, frame, port_out):
+    def on_frame_sending(self, frame: Frame, port_out: int):
+        """
+        called when a node starts sending
+        :param frame: frame to send
+        :param port_out: egress port
+        """
         self.env.sim_print("%s: %s sending on port %s" % (str(self.address), str(frame), str(port_out)))
 
-    def on_port_added(self, port, bandwidth, *args):
+    def on_port_added(self, port: int, bandwidth: float, *args):
+        """
+        called when a port is added to this node. most likely upon using NetworkBuilder.connect_node
+        :param port: added port
+        :param bandwidth: connection bandwidth
+        :param args: further arguments if needed. Right now only switches need this parameter
+        """
         pass
 
     def get_monitor_table(self):
@@ -27,12 +48,25 @@ class Node(object):
         pass
 
     # called by NetworkEnvironment when Node receives a frame
-    def push(self, frame, port_in):
+    def push(self, frame: Frame, port_in: int):
+        """
+        called by NetworkEnvironment when a Node receives a frame
+        :param frame: frame to push to the receiving node
+        :param port_in: ingress port of the receiving node
+        """
         self.on_frame_received(frame, port_in)
 
     # called when Node starts sending a frame on port x
     # returns timeout_event until frame is completely send [AND an inspector for that event if inspector=True]
-    def pop(self, frame, port_out, extra_bytes=0, inspector=False):
+    def pop(self, frame: Frame, port_out: int, extra_bytes: int = 0, inspector: bool = False):
+        """
+        called when Node starts sending a frame on port x
+        :param frame: frame to send
+        :param port_out: egress port
+        :param extra_bytes: additional bytes to send, this is to increase the sending time without altering the frame
+        :param inspector: true if you want an inspector for the sending event, false otherwise
+        :return: returns a sending_event until the frame is completely send [AND an inspector for that event if inspector=True]
+        """
         send_event = self.env.send_frame(frame, self.address, port_out, extra_bytes, inspector)
         self.on_frame_sending(frame, port_out)
         return send_event

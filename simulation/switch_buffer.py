@@ -1,9 +1,19 @@
 from collections import defaultdict, deque
 from math import sqrt
 
+from simulation.frame import Frame
+
 
 class SwitchBuffer(object):
-    def __init__(self, env, port_transmit_rate, traffic_class_map, tsa_map, config, monitor=False):
+    def __init__(self, env, port_transmit_rate: int, traffic_class_map, tsa_map, config, monitor: bool = False):
+        """
+        :param env:
+        :param port_transmit_rate: Bandwdith of the connection
+        :param traffic_class_map: PriorityMap for this port
+        :param tsa_map: TransmissionSelectionAlgorithmMap for this port
+        :param config: TrafficClassBandwidthMap for this port
+        :param monitor:
+        """
         self.env = env
         self.monitor = monitor
         self.data = defaultdict(list)
@@ -25,27 +35,39 @@ class SwitchBuffer(object):
                 return frame
         return None
 
-    def append_frame(self, frame):
+    def append_frame(self, frame: Frame):
         if self.monitor:
             self.data["append"].append((self.env.now, self.__len__(), frame))
         self.tsa[self.t_class_p_map.get_traffic_class(frame.priority)].append_frame(self.env.now, frame)
 
     # drops a frame without transmitting it
-    def drop_frame(self, frame):
+    def drop_frame(self, frame: Frame):
         if self.monitor:
             self.data["drop"].append((self.env.now, self.__len__(), frame))
         self.tsa[self.t_class_p_map.get_traffic_class(frame.priority)].remove_frame(self.env.now, frame)
 
     # called when transmission of a frame is started
-    def transmission_start(self, frame):
+    def transmission_start(self, frame: Frame):
+        """
+        called when transmission of a frame is started
+        :param frame:
+        """
         self.tsa[self.t_class_p_map.get_traffic_class(frame.priority)].transmitting(self.env.now, True)
 
     # called when transmission of a frame is paused, e.g. frame preemption
-    def transmission_pause(self, frame):
+    def transmission_pause(self, frame: Frame):
+        """
+        called when transmission of a frame is paused, e.g. frame preemption
+        :param frame:
+        """
         self.tsa[self.t_class_p_map.get_traffic_class(frame.priority)].transmitting(self.env.now, False)
 
     # called when transmission of a frame is done, the frame is removed from the queue
-    def transmission_done(self, frame):
+    def transmission_done(self, frame: Frame):
+        """
+        called when transmission of a frame is done, the frame is removed from the queue
+        :param frame:
+        """
         if self.monitor:
             self.data["pop"].append((self.env.now, self.__len__(), frame))
         traffic_class = self.t_class_p_map.get_traffic_class(frame.priority)
@@ -94,7 +116,13 @@ class FrameFIFO(FrameQueue):
 
 
 class TransmissionSelectionAlgorithm(object):
-    def __init__(self, port_transmit_rate, delta_bandwidth, queue=None):
+    def __init__(self, port_transmit_rate: int, delta_bandwidth: float, queue: FrameQueue = None):
+        """
+
+        :param port_transmit_rate: Bandwdith of the connection
+        :param delta_bandwidth: usage of the available bandwidth in %. 0-1
+        :param queue: Queuetype for this TransmissionSelectionAlgorithm
+        """
         self.port_transmit_rate = port_transmit_rate
         self.delta_bandwidth = delta_bandwidth
         self.queue = queue if queue is not None else FrameFIFO()
