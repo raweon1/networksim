@@ -33,9 +33,29 @@ def foo4():
         yield env
 
 
+def gen(env):
+    while True:
+        yield Frame(env, "source", "sink", 5000)
+
+
+def foo():
+    while True:
+        env = NetworkEnvironment(name="Test", seed=122333, verbose=True)
+        builder = env.builder
+        sink = Sink(env, "sink")
+        source = Tmp(env, "source", gen(env), exp_generator(env, 1/4000))
+        builder.append_nodes(sink, source)
+        builder.connect_nodes(source, sink)
+        yield env
+
+
 def nice_output(sim_env):
     print("-----------------------")
     print(json.dumps(sim_env.get_monitor_results(), indent=2))
+
+
+tmp = foo().__next__()
+tmp.run(1000000)
 
 
 # simulate_in_steps(foo2(), 10, 100000, nice_output)
@@ -49,4 +69,4 @@ def nice_output(sim_env):
 
 
 # simulate_same_multiple_csv(foo2(), 10, 100000, "foooo")
-simulate_same_multiple_csv(foo4(), 3, 100000, file_name="test")
+#simulate_same_multiple_csv(foo4(), 3, 100000, file_name="test")

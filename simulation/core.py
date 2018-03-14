@@ -82,7 +82,6 @@ class NetworkEnvironment(simpy.Environment):
 
     def get_monitor_tables(self):
         """
-
         :return: dict of lists of monitored information
         """
         result = defaultdict(list)
@@ -111,7 +110,6 @@ class NetworkEnvironment(simpy.Environment):
     def send_frame(self, frame: Frame, source_address, port_out: int, extra_bytes: int = 0, inspector: bool = False):
         # receiver = [address, port_in, bandwidth, physical_delay]
         """
-
         :param frame: frame to send
         :param source_address: address of the sending node
         :param port_out: egress port of the sending node
@@ -208,7 +206,6 @@ class NetworkBuilder(object):
     def connect_nodes(self, node_a: Node, node_b: Node, bandwidth: int = 10, channel_type=None, channel_length: int = 0,
                       *switch_params: SwitchPortParam):
         """
-
         :param node_a: first Node to connect
         :param node_b: second Node to connect
         :param bandwidth: bandwidth of this connection

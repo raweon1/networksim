@@ -1,5 +1,7 @@
 import numpy as np
 from math import sqrt
+from collections import deque
+from simpy import Interrupt
 
 from simulation.frame import Frame
 
@@ -77,6 +79,50 @@ class Node(object):
 
     def __str__(self):
         return str(self.address)
+
+
+class Tmp(Node):
+    def __init__(self, env, address, frame_generator, sleep_generator, monitor: bool = False):
+        """
+        :param env:
+        :param address:
+        :param frame_generator: generator which produces frames to send
+        :param sleep_generator: generator which produces floats >= 0. This is the time in µs this process waits
+        until a new frame is being send
+        :param monitor:
+        """
+        super(Tmp, self).__init__(env, address, monitor)
+        self.frame_queue = deque()
+        self.sleep_event = self.env.event()
+        self.sleeping = False
+        self.frame_process = self.env.process(self.generate_frame(frame_generator, sleep_generator))
+        self.send_process = self.env.process(self.send_frame())
+
+    def generate_frame(self, frame_generator, sleep_generator):
+        while True:
+            frame = frame_generator.__next__()
+            self.frame_queue.append(frame)
+            if self.sleeping:
+                self.send_process.interrupt("new frame")
+            sleep_time = sleep_generator.__next__()
+            yield self.env.timeout(sleep_time)
+
+    def send_frame(self):
+        # frage: bei monitored frames wird die zeit der erstellung genommen, ist das hier so gedacht?
+        while True:
+            try:
+                if self.frame_queue.__len__() > 0:
+                    self.env.sim_print("sending")
+                    self.env.sim_print(self.frame_queue.__len__())
+                    self.sleeping = False
+                    frame = self.frame_queue.popleft()
+                    yield self.pop(frame, self.ports[0])
+                else:
+                    self.env.sim_print("sleeping")
+                    self.sleeping = True
+                    yield self.sleep_event
+            except Interrupt:
+                pass
 
 
 class Flow(Node):
